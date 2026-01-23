@@ -31,9 +31,7 @@ async def download_file(url: str, headers: dict) -> bytes:
                 return content
             else:
                 error_text = await resp.text()
-                raise Exception(
-                    f"Failed to download file: HTTP {resp.status} – {error_text}"
-                )
+                raise Exception(f"Failed to download file: HTTP {resp.status} – {error_text}")
 
 
 def pdf_to_base64_images(pdf_bytes: bytes, filename: str = "") -> list[dict]:
@@ -79,9 +77,7 @@ def pdf_to_base64_images(pdf_bytes: bytes, filename: str = "") -> list[dict]:
     return image_blocks
 
 
-async def process_files(
-    file_urls: list[dict], openwebui_host: str, openwebui_token: str
-) -> list[dict]:
+async def process_files(file_urls: list[dict], openwebui_host: str, openwebui_token: str) -> list[dict]:
     """
     Асинхронно обрабатывает список файлов: загружает каждый файл по URL
     и конвертирует PDF в base64-кодированные изображения.

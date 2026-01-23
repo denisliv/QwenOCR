@@ -7,9 +7,7 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -58,6 +56,7 @@ class Pipeline:
         self.name = "OCR Assistant"
         self.description = "Пайплайн OCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
+        self.llm = None
         self._files = []
 
         self.valves = self.Valves(
@@ -65,15 +64,9 @@ class Pipeline:
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv(
-                    "VLM_MODEL_NAME", self.config.vlm_model_name
-                ),
-                "OPENWEBUI_API_KEY": os.getenv(
-                    "OPENWEBUI_API_KEY", self.config.openwebui_token
-                ),
-                "OPENWEBUI_HOST": os.getenv(
-                    "OPENWEBUI_HOST", self.config.openwebui_host
-                ),
+                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
+                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
+                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
             }
         )
 
@@ -83,6 +76,15 @@ class Pipeline:
         Выполняет инициализацию и подготовку к работе.
         """
         logger.info("OCR Assistant starting up...")
+        self.llm = ChatOpenAI(
+            base_url=self.valves.VLM_API_URL,
+            api_key=self.valves.VLM_API_KEY,
+            model=self.valves.VLM_MODEL_NAME,
+            temperature=self.config.temperature,
+            presence_penalty=self.config.presence_penalty,
+            extra_body={"repetition_penalty": self.config.repetition_penalty},
+        )
+        logger.info("VLM started")
 
     async def on_shutdown(self):
         """
@@ -101,16 +103,7 @@ class Pipeline:
         Returns:
             Строка с результатом обработки от VLM модели
         """
-        llm = ChatOpenAI(
-            base_url=self.valves.VLM_API_URL,
-            api_key=self.valves.VLM_API_KEY,
-            model=self.valves.VLM_MODEL_NAME,
-            temperature=self.config.temperature,
-            presence_penalty=self.config.presence_penalty,
-            extra_body={"repetition_penalty": self.config.repetition_penalty},
-        )
-        logger.info(f"LLM info: {llm}")
-        resp = llm.invoke(messages)
+        resp = self.llm.invoke(messages)
         result = parser.invoke(resp)
         logger.info("VLM invocation completed")
         return result
@@ -136,42 +129,24 @@ class Pipeline:
                 f
                 for f in files
                 if f.get("file", {}).get("data", {}).get("status") == "completed"
-                and f.get("file", {}).get("meta", {}).get("content_type")
-                == "application/pdf"
+                and f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"
             ]
 
-            # Сохраняем только URL и имя файла
-            self._files = [
-                {"url": f["url"], "name": f.get("name", "unknown")} for f in valid_files
-            ]
-
+            self._files = [{"url": f["url"], "name": f.get("name", "unknown")} for f in valid_files]
             if self._files:
                 logger.info(f"Found {len(self._files)} valid PDF file(s)")
-        else:
-            self._files = []
 
-        # body не изменяется
         return body
 
     async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """
         Обрабатывает исходящий ответ после получения результата от API.
-        Очищает кеш файлов для следующего запроса.
-
-        Args:
-            body: Тело ответа от API
-            user: Информация о пользователе (опционально)
-
-        Returns:
-            Исходное тело ответа без изменений
         """
         self._files = []
         logger.info("Cleared files cache")
         return body
 
-    async def pipe(
-        self, user_message: str, model_id: str, messages: List[dict], body: dict
-    ) -> Union[str, dict]:
+    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, dict]:
         """
         Основной метод обработки запроса через пайплайн.
         Загружает файлы из self._files, преобразует их в base64 изображения,
@@ -187,6 +162,7 @@ class Pipeline:
             Результат обработки от VLM модели или сообщение об ошибке
         """
         logger.info("Starting OCR pipeline")
+        logger.info(f"Found in pipe: {self._files}")
 
         try:
             # Формируем новый messages для llm (логика формирования остается такой же - только если есть файлы)
@@ -194,9 +170,7 @@ class Pipeline:
 
             # Добавляем системный промпт в начало списка сообщений
             # Проверяем, есть ли уже системное сообщение
-            has_system_message = any(
-                msg.get("role") == "system" for msg in vlm_messages
-            )
+            has_system_message = any(msg.get("role") == "system" for msg in vlm_messages)
             if not has_system_message:
                 vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
             else:
@@ -225,17 +199,10 @@ class Pipeline:
                             break
 
                     if last_user_msg_index is not None:
-                        original_content = vlm_messages[last_user_msg_index].get(
-                            "content", ""
-                        )
+                        original_content = vlm_messages[last_user_msg_index].get("content", "")
                         new_content = []
-                        if (
-                            isinstance(original_content, str)
-                            and original_content.strip()
-                        ):
-                            new_content.append(
-                                {"type": "text", "text": original_content}
-                            )
+                        if isinstance(original_content, str) and original_content.strip():
+                            new_content.append({"type": "text", "text": original_content})
                         new_content.extend(image_blocks)
                         vlm_messages[last_user_msg_index] = {
                             **vlm_messages[last_user_msg_index],
