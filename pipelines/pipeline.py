@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -7,7 +8,9 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
+    formatter = logging.Formatter(
+        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
+    )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -64,9 +67,15 @@ class Pipeline:
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
-                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
-                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
+                "VLM_MODEL_NAME": os.getenv(
+                    "VLM_MODEL_NAME", self.config.vlm_model_name
+                ),
+                "OPENWEBUI_API_KEY": os.getenv(
+                    "OPENWEBUI_API_KEY", self.config.openwebui_token
+                ),
+                "OPENWEBUI_HOST": os.getenv(
+                    "OPENWEBUI_HOST", self.config.openwebui_host
+                ),
             }
         )
 
@@ -129,10 +138,13 @@ class Pipeline:
                 f
                 for f in files
                 if f.get("file", {}).get("data", {}).get("status") == "completed"
-                and f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"
+                and f.get("file", {}).get("meta", {}).get("content_type")
+                == "application/pdf"
             ]
 
-            self._files = [{"url": f["url"], "name": f.get("name", "unknown")} for f in valid_files]
+            self._files = [
+                {"url": f["url"], "name": f.get("name", "unknown")} for f in valid_files
+            ]
             if self._files:
                 logger.info(f"Found {len(self._files)} valid PDF file(s)")
 
@@ -146,7 +158,9 @@ class Pipeline:
         logger.info("Cleared files cache")
         return body
 
-    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, dict]:
+    def pipe(
+        self, user_message: str, model_id: str, messages: List[dict], body: dict
+    ) -> Union[str, dict]:
         """
         Основной метод обработки запроса через пайплайн.
         Загружает файлы из self._files, преобразует их в base64 изображения,
@@ -170,7 +184,9 @@ class Pipeline:
 
             # Добавляем системный промпт в начало списка сообщений
             # Проверяем, есть ли уже системное сообщение
-            has_system_message = any(msg.get("role") == "system" for msg in vlm_messages)
+            has_system_message = any(
+                msg.get("role") == "system" for msg in vlm_messages
+            )
             if not has_system_message:
                 vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
             else:
@@ -183,10 +199,12 @@ class Pipeline:
             if self._files:
                 # Загружаем файлы и преобразуем в base64
                 logger.info(f"Processing {len(self._files)} file(s)")
-                image_blocks = await process_files(
-                    self._files,
-                    self.valves.OPENWEBUI_HOST,
-                    self.valves.OPENWEBUI_API_KEY,
+                image_blocks = asyncio.run(
+                    process_files(
+                        self._files,
+                        self.valves.OPENWEBUI_HOST,
+                        self.valves.OPENWEBUI_API_KEY,
+                    )
                 )
 
                 if image_blocks:
@@ -199,10 +217,17 @@ class Pipeline:
                             break
 
                     if last_user_msg_index is not None:
-                        original_content = vlm_messages[last_user_msg_index].get("content", "")
+                        original_content = vlm_messages[last_user_msg_index].get(
+                            "content", ""
+                        )
                         new_content = []
-                        if isinstance(original_content, str) and original_content.strip():
-                            new_content.append({"type": "text", "text": original_content})
+                        if (
+                            isinstance(original_content, str)
+                            and original_content.strip()
+                        ):
+                            new_content.append(
+                                {"type": "text", "text": original_content}
+                            )
                         new_content.extend(image_blocks)
                         vlm_messages[last_user_msg_index] = {
                             **vlm_messages[last_user_msg_index],
