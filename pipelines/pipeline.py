@@ -8,9 +8,7 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -30,8 +28,7 @@ from pydantic import BaseModel
 
 class Pipeline:
     """
-    Pipeline для OpenWebUI, обеспечивающий работу с VLM моделью для анализа изображений,
-    ответов на вопросы по ним и выполнения OCR.
+    Pipeline для OpenWebUI, обеспечивающий работу с VLM моделью для анализа изображений и выполнения OCR.
     """
 
     class Valves(BaseModel):
@@ -42,6 +39,7 @@ class Pipeline:
             VLM_API_URL: URL API для VLM модели
             VLM_API_KEY: API ключ для VLM модели
             VLM_MODEL_NAME: Название VLM модели
+            DPI: Желаемое разрешение изображений
             OPENWEBUI_API_KEY: API ключ для OpenWebUI
             OPENWEBUI_HOST: Хост OpenWebUI
         """
@@ -49,43 +47,39 @@ class Pipeline:
         VLM_API_URL: str
         VLM_API_KEY: str
         VLM_MODEL_NAME: str
-        OPENWEBUI_API_KEY: str
+        DPI: int
         OPENWEBUI_HOST: str
+        OPENWEBUI_API_KEY: str
 
     def __init__(self):
         """
         Инициализирует Pipeline, загружает конфигурацию и настраивает параметры.
         """
-        self.name = "OCR Assistant"
+        self.name = "OCR-Ассистент"
         self.description = "Пайплайн OCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
-        self.llm = None
-        self._files = []
+        self.vlm = None
+        self._files = {}
 
         self.valves = self.Valves(
             **{
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv(
-                    "VLM_MODEL_NAME", self.config.vlm_model_name
-                ),
-                "OPENWEBUI_API_KEY": os.getenv(
-                    "OPENWEBUI_API_KEY", self.config.openwebui_token
-                ),
-                "OPENWEBUI_HOST": os.getenv(
-                    "OPENWEBUI_HOST", self.config.openwebui_host
-                ),
+                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
+                "DPI": os.getenv("DPI", self.config.dpi),
+                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
+                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
             }
         )
 
     async def on_startup(self):
         """
         Вызывается при запуске пайплайна.
-        Выполняет инициализацию и подготовку к работе.
+        Выполняет инициализацию VLM и подготовку к работе.
         """
         logger.info("OCR Assistant starting up...")
-        self.llm = ChatOpenAI(
+        self.vlm = ChatOpenAI(
             base_url=self.valves.VLM_API_URL,
             api_key=self.valves.VLM_API_KEY,
             model=self.valves.VLM_MODEL_NAME,
@@ -112,7 +106,7 @@ class Pipeline:
         Returns:
             Строка с результатом обработки от VLM модели
         """
-        resp = self.llm.invoke(messages)
+        resp = self.vlm.invoke(messages)
         result = parser.invoke(resp)
         logger.info("VLM invocation completed")
         return result
@@ -130,23 +124,20 @@ class Pipeline:
             Исходное тело запроса без изменений
         """
         logger.info("Processing inlet request")
-
+        user_id = user["id"]
+        self._files[user_id] = None
         files = body.get("files", [])
 
         if files:
-            valid_files = [
+            pdf_valid_files = [
                 f
                 for f in files
                 if f.get("file", {}).get("data", {}).get("status") == "completed"
-                and f.get("file", {}).get("meta", {}).get("content_type")
-                == "application/pdf"
+                and f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"
             ]
-
-            self._files = [
-                {"url": f["url"], "name": f.get("name", "unknown")} for f in valid_files
-            ]
+            self._files[user_id] = [{"url": f["url"], "name": f.get("name", "unknown")} for f in pdf_valid_files]
             if self._files:
-                logger.info(f"Found {len(self._files)} valid PDF file(s)")
+                logger.info(f"Found {len(self._files[user_id])} valid file(s) for User {user_id}")
 
         return body
 
@@ -154,13 +145,9 @@ class Pipeline:
         """
         Обрабатывает исходящий ответ после получения результата от API.
         """
-        self._files = []
-        logger.info("Cleared files cache")
         return body
 
-    def pipe(
-        self, user_message: str, model_id: str, messages: List[dict], body: dict
-    ) -> Union[str, dict]:
+    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, dict]:
         """
         Основной метод обработки запроса через пайплайн.
         Загружает файлы из self._files, преобразует их в base64 изображения,
@@ -170,46 +157,28 @@ class Pipeline:
             user_message: Сообщение пользователя
             model_id: Идентификатор модели
             messages: Список сообщений для обработки
-            body: Тело запроса (не изменяется)
+            body: Тело запроса
 
         Returns:
             Результат обработки от VLM модели или сообщение об ошибке
         """
         logger.info("Starting OCR pipeline")
-        logger.info(f"Found in pipe: {self._files}")
 
         try:
-            # Формируем новый messages для llm (логика формирования остается такой же - только если есть файлы)
             vlm_messages = messages.copy()
-
-            # Добавляем системный промпт в начало списка сообщений
-            # Проверяем, есть ли уже системное сообщение
-            has_system_message = any(
-                msg.get("role") == "system" for msg in vlm_messages
-            )
+            has_system_message = any(msg.get("role") == "system" for msg in vlm_messages)
             if not has_system_message:
                 vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-            else:
-                # Если системное сообщение уже есть, заменяем его на наш промпт
-                for i, msg in enumerate(vlm_messages):
-                    if msg.get("role") == "system":
-                        vlm_messages[i] = {"role": "system", "content": SYSTEM_PROMPT}
-                        break
 
-            if self._files:
-                # Загружаем файлы и преобразуем в base64
-                logger.info(f"Processing {len(self._files)} file(s)")
+            user_id = body["user"]["id"]
+            if self._files[user_id]:
+                logger.info(f"Processing {len(self._files[user_id])} file(s) for {user_id}")
                 image_blocks = asyncio.run(
-                    process_files(
-                        self._files,
-                        self.valves.OPENWEBUI_HOST,
-                        self.valves.OPENWEBUI_API_KEY,
-                    )
+                    process_files(self._files[user_id], self.valves.OPENWEBUI_HOST, self.valves.OPENWEBUI_API_KEY, self.valves.DPI)
                 )
 
                 if image_blocks:
                     logger.info(f"Generated {len(image_blocks)} image block(s)")
-                    # Находим последнее сообщение пользователя
                     last_user_msg_index = None
                     for i in range(len(vlm_messages) - 1, -1, -1):
                         if vlm_messages[i].get("role") == "user":
@@ -217,17 +186,10 @@ class Pipeline:
                             break
 
                     if last_user_msg_index is not None:
-                        original_content = vlm_messages[last_user_msg_index].get(
-                            "content", ""
-                        )
+                        original_content = vlm_messages[last_user_msg_index].get("content", "")
                         new_content = []
-                        if (
-                            isinstance(original_content, str)
-                            and original_content.strip()
-                        ):
-                            new_content.append(
-                                {"type": "text", "text": original_content}
-                            )
+                        if isinstance(original_content, str) and original_content.strip():
+                            new_content.append({"type": "text", "text": original_content})
                         new_content.extend(image_blocks)
                         vlm_messages[last_user_msg_index] = {
                             **vlm_messages[last_user_msg_index],

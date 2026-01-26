@@ -14,11 +14,9 @@ class AppConfig:
     repetition_penalty: float
 
     dpi: int
-    max_tile_size: int
-    tile_overlap: int
 
-    openwebui_token: str
     openwebui_host: str
+    openwebui_token: str
 
     @classmethod
     def from_yaml(cls, path: str = "pipelines/ocr_utils/config.yaml") -> "AppConfig":
@@ -33,8 +31,6 @@ class AppConfig:
             presence_penalty=data["presence_penalty"],
             repetition_penalty=data["repetition_penalty"],
             dpi=data["dpi"],
-            max_tile_size=data["max_tile_size"],
-            tile_overlap=data["tile_overlap"],
-            openwebui_token=data["openwebui_token"],
             openwebui_host=data["openwebui_host"],
+            openwebui_token=data["openwebui_token"],
         )
