@@ -59,7 +59,11 @@ class Pipeline:
         self.description = "Пайплайн OCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
         self.vlm = None
-        self._files = {}
+        # Структура: self._files = {"files": [...], "cache": {...}}
+        # files: список файлов (метаданные: url, name)
+        # cache: кэш сконвертированных изображений (ключ - url, значение - list[dict])
+        # Pipeline инициализируется для каждого пользователя отдельно, поэтому user_id не нужен
+        self._files = {"files": [], "cache": {}}
 
         self.valves = self.Valves(
             **{
@@ -115,6 +119,7 @@ class Pipeline:
         """
         Обрабатывает входящий запрос перед отправкой в API.
         Извлекает URL прикрепленных PDF файлов и сохраняет их в self._files.
+        Кэширование: файлы, которые уже были загружены ранее, не будут загружаться заново.
 
         Args:
             body: Тело запроса, содержащее информацию о файлах
@@ -124,8 +129,6 @@ class Pipeline:
             Исходное тело запроса без изменений
         """
         logger.info("Processing inlet request")
-        user_id = user["id"]
-        self._files[user_id] = None
         files = body.get("files", [])
 
         if files:
@@ -135,9 +138,17 @@ class Pipeline:
                 if f.get("file", {}).get("data", {}).get("status") == "completed"
                 and f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"
             ]
-            self._files[user_id] = [{"url": f["url"], "name": f.get("name", "unknown")} for f in pdf_valid_files]
-            if self._files:
-                logger.info(f"Found {len(self._files[user_id])} valid file(s) for User {user_id}")
+            # Обновляем список файлов на основе актуального состояния из body
+            # Кэш сохраняется отдельно и не зависит от этого списка
+            new_files = [{"url": f["url"], "name": f.get("name", "unknown")} for f in pdf_valid_files]
+            self._files["files"] = new_files
+            
+            if new_files:
+                logger.info(f"Updated file list: {len(new_files)} valid file(s)")
+        else:
+            # Если файлов нет в запросе, очищаем список
+            # Кэш сохраняется
+            self._files["files"] = []
 
         return body
 
@@ -170,12 +181,20 @@ class Pipeline:
             if not has_system_message:
                 vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
-            user_id = body["user"]["id"]
-            if self._files[user_id]:
-                logger.info(f"Processing {len(self._files[user_id])} file(s) for {user_id}")
+            if self._files.get("files"):
+                files_list = self._files["files"]
+                cache = self._files.get("cache", {})
+                logger.info(f"Processing {len(files_list)} file(s)")
                 image_blocks = asyncio.run(
-                    process_files(self._files[user_id], self.valves.OPENWEBUI_HOST, self.valves.OPENWEBUI_API_KEY, self.valves.DPI)
+                    process_files(
+                        files_list, 
+                        self.valves.OPENWEBUI_HOST, 
+                        self.valves.OPENWEBUI_API_KEY, 
+                        self.valves.DPI,
+                        cache
+                    )
                 )
+                # Кэш обновляется автоматически, так как cache - это ссылка на self._files["cache"]
 
                 if image_blocks:
                     logger.info(f"Generated {len(image_blocks)} image block(s)")
