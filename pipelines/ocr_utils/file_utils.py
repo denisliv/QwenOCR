@@ -80,41 +80,45 @@ async def process_files(
     openwebui_host: str,
     openwebui_token: str,
     dpi: int,
-) -> list[dict]:
+) -> dict[str, list[dict]]:
     """
     Асинхронно обрабатывает список файлов: загружает каждый файл по URL
     и конвертирует PDF в base64-кодированные изображения.
-    Кэш изображений не используется, так как изображения хранятся в истории сообщений.
+    Возвращает словарь с изображениями для каждого файла.
 
     Args:
         file_urls: Список словарей с информацией о файлах.
-                   Каждый словарь должен содержать ключи 'url' и 'name'
+                   Каждый словарь должен содержать ключи 'url', 'name' и 'id'
         openwebui_host: Базовый URL хоста OpenWebUI
         openwebui_token: Токен авторизации для доступа к API OpenWebUI
         dpi: Разрешение для конвертации PDF в изображения
 
     Returns:
-        Список блоков изображений в формате для messages API.
-        Если токен не установлен, возвращает пустой список.
+        Словарь {file_id: [image_blocks]} с блоками изображений для каждого файла.
+        Если токен не установлен, возвращает пустой словарь.
         Ошибки при обработке отдельных файлов логируются, но не прерывают обработку.
     """
     if not openwebui_token:
         logger.warning("OPENWEBUI_API_KEY not set — skipping file download")
-        return []
+        return {}
 
     headers = {"Authorization": f"Bearer {openwebui_token}"}
-    all_image_blocks = []
+    files_images = {}
 
     for file_meta in file_urls:
         url = f"{openwebui_host}{file_meta['url']}/content"
         filename = file_meta.get("name", "unknown.pdf")
+        file_id = file_meta.get("id")
 
         try:
             content = await download_file(url, headers)
             image_blocks = pdf_to_base64_images(content, filename, dpi)
             logger.info(f"Processed file {filename} ({len(image_blocks)} pages)")
-            all_image_blocks.extend(image_blocks)
+            if file_id:
+                files_images[file_id] = image_blocks
+            else:
+                logger.warning(f"File {filename} has no id, skipping")
         except Exception as e:
             logger.error(f"Exception processing file {filename}: {e}")
 
-    return all_image_blocks
+    return files_images
