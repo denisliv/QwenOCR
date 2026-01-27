@@ -59,11 +59,8 @@ class Pipeline:
         self.description = "Пайплайн OCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
         self.vlm = None
-        # Структура: self._files = {"files": [...], "cache": {...}}
-        # files: список файлов (метаданные: url, name)
-        # cache: кэш сконвертированных изображений (ключ - url, значение - list[dict])
-        # Pipeline инициализируется для каждого пользователя отдельно, поэтому user_id не нужен
-        self._files = {"files": [], "cache": {}}
+        self._files = []
+        self._cache = {}
 
         self.valves = self.Valves(
             **{
@@ -138,18 +135,11 @@ class Pipeline:
                 if f.get("file", {}).get("data", {}).get("status") == "completed"
                 and f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"
             ]
-            # Обновляем список файлов на основе актуального состояния из body
-            # Кэш сохраняется отдельно и не зависит от этого списка
-            new_files = [{"url": f["url"], "name": f.get("name", "unknown")} for f in pdf_valid_files]
-            self._files["files"] = new_files
-            
-            if new_files:
-                logger.info(f"Updated file list: {len(new_files)} valid file(s)")
-        else:
-            # Если файлов нет в запросе, очищаем список
-            # Кэш сохраняется
-            self._files["files"] = []
 
+            self._files = [{"url": f["url"], "name": f.get("name", "unknown.pdf")} for f in pdf_valid_files]
+
+            if self._files:
+                logger.info(f"Updated file list: {len(self._files)} valid file(s)")
         return body
 
     async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
@@ -180,21 +170,12 @@ class Pipeline:
             has_system_message = any(msg.get("role") == "system" for msg in vlm_messages)
             if not has_system_message:
                 vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-
-            if self._files.get("files"):
-                files_list = self._files["files"]
-                cache = self._files.get("cache", {})
-                logger.info(f"Processing {len(files_list)} file(s)")
+            logger.info(f"vlm_messages: {vlm_messages}")
+            if self._files or self._cache:
+                logger.info(f"Processing {len(self._files)} file(s)")
                 image_blocks = asyncio.run(
-                    process_files(
-                        files_list, 
-                        self.valves.OPENWEBUI_HOST, 
-                        self.valves.OPENWEBUI_API_KEY, 
-                        self.valves.DPI,
-                        cache
-                    )
+                    process_files(self._files, self._cache, self.valves.OPENWEBUI_HOST, self.valves.OPENWEBUI_API_KEY, self.valves.DPI)
                 )
-                # Кэш обновляется автоматически, так как cache - это ссылка на self._files["cache"]
 
                 if image_blocks:
                     logger.info(f"Generated {len(image_blocks)} image block(s)")
@@ -206,10 +187,30 @@ class Pipeline:
 
                     if last_user_msg_index is not None:
                         original_content = vlm_messages[last_user_msg_index].get("content", "")
+
+                        if isinstance(original_content, str):
+                            content_normalized = original_content.replace("\r\n", "\n").lstrip()
+
+                            if content_normalized.startswith("### Task:") and "</context>" in content_normalized:
+                                user_query = content_normalized.split("</context>", 1)[1].lstrip()
+
+                                lines = user_query.split("\n")
+                                cleaned_lines = []
+                                for line in lines:
+                                    if line.strip() or cleaned_lines:
+                                        cleaned_lines.append(line)
+
+                                original_content = "\n".join(cleaned_lines).rstrip()
+                                logger.info(f"Cleaned OpenWebUI preamble. User query: {original_content!r}")
+                            else:
+                                original_content = original_content.strip()
+                                logger.debug(f"No OpenWebUI preamble detected. Keeping original content: {original_content!r}")
+
                         new_content = []
                         if isinstance(original_content, str) and original_content.strip():
                             new_content.append({"type": "text", "text": original_content})
                         new_content.extend(image_blocks)
+
                         vlm_messages[last_user_msg_index] = {
                             **vlm_messages[last_user_msg_index],
                             "content": new_content,

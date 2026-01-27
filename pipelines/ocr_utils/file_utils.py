@@ -29,9 +29,7 @@ async def download_file(url: str, headers: dict) -> bytes:
                 return content
             else:
                 error_text = await resp.text()
-                raise Exception(
-                    f"Failed to download file: HTTP {resp.status} – {error_text}"
-                )
+                raise Exception(f"Failed to download file: HTTP {resp.status} – {error_text}")
 
 
 def pdf_to_base64_images(
@@ -68,9 +66,7 @@ def pdf_to_base64_images(
             data_url = f"data:image/png;base64,{b64_content}"
             image_blocks.append({"type": "image_url", "image_url": {"url": data_url}})
         pdf_document.close()
-        logger.info(
-            f"PDF converted: {filename} ({len(image_blocks)} pages) at {dpi} DPI"
-        )
+        logger.info(f"PDF converted: {filename} ({len(image_blocks)} pages) at {dpi} DPI")
 
     except Exception as e:
         logger.error(f"Failed to convert PDF {filename} to images: {e}")
@@ -81,10 +77,10 @@ def pdf_to_base64_images(
 
 async def process_files(
     file_urls: list[dict],
+    cache: dict,
     openwebui_host: str,
     openwebui_token: str,
     dpi: int,
-    cache: dict = None,
 ) -> list[dict]:
     """
     Асинхронно обрабатывает список файлов: загружает каждый файл по URL
@@ -94,10 +90,10 @@ async def process_files(
     Args:
         file_urls: Список словарей с информацией о файлах.
                    Каждый словарь должен содержать ключи 'url' и 'name'
+        cache: Словарь для кэширования результатов. Ключ: url (строка), Значение: list[dict] (список image_blocks)
         openwebui_host: Базовый URL хоста OpenWebUI
         openwebui_token: Токен авторизации для доступа к API OpenWebUI
         dpi: Разрешение для конвертации PDF в изображения
-        cache: Словарь для кэширования результатов. Ключ: url (строка), Значение: list[dict] (список image_blocks)
 
     Returns:
         Список блоков изображений в формате для messages API.
@@ -108,17 +104,13 @@ async def process_files(
         logger.warning("OPENWEBUI_API_KEY not set — skipping file download")
         return []
 
-    if cache is None:
-        cache = {}
-
     headers = {"Authorization": f"Bearer {openwebui_token}"}
     all_image_blocks = []
 
     for file_meta in file_urls:
         url = f"{openwebui_host}{file_meta['url']}/content"
-        filename = file_meta.get("name", "unknown")
+        filename = file_meta.get("name", "unknown.pdf")
 
-        # Проверяем кэш по URL (URL уникальный, DPI не используется в ключе)
         if url in cache:
             logger.info(f"Using cached images for file {filename} (url: {url})")
             all_image_blocks.extend(cache[url])
@@ -127,7 +119,6 @@ async def process_files(
         try:
             content = await download_file(url, headers)
             image_blocks = pdf_to_base64_images(content, filename, dpi)
-            # Сохраняем в кэш по URL
             cache[url] = image_blocks
             logger.info(f"Cached images for file {filename} (url: {url})")
             all_image_blocks.extend(image_blocks)
