@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import sys
@@ -61,7 +60,6 @@ class Pipeline:
         self.description = "Пайплайн OCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
         self.vlm = None
-        self._new_files = []  # Новые файлы для текущего запроса
         # Кэш метаданных: {user_id: {session_id: set([file_id1, file_id2, ...])}}
         self._processed_files_cache = {}
 
@@ -124,25 +122,25 @@ class Pipeline:
     async def inlet(self, body: dict, user: dict) -> dict:
         """
         Обрабатывает входящий запрос перед отправкой в API.
-        Определяет новые файлы, которые еще не были обработаны для данного пользователя и сессии.
-        Сохраняет только новые файлы в self._new_files.
+        Определяет новые файлы, обрабатывает их (конвертирует в изображения),
+        и обновляет body['messages'] для сохранения модифицированных сообщений в истории.
 
         Args:
-            body: Тело запроса, содержащее информацию о файлах
+            body: Тело запроса, содержащее информацию о файлах и сообщениях
             user: Информация о пользователе
 
         Returns:
-            Исходное тело запроса без изменений
+            Тело запроса с обновленными сообщениями
         """
         logger.info("Processing inlet request")
         files = body.get("files", [])
+        messages = body.get("messages", [])
         metadata = body.get("metadata", {})
         user_id = metadata.get("user_id") or user.get("id")
         session_id = metadata.get("session_id")
 
         if not user_id or not session_id:
             logger.warning("Missing user_id or session_id, skipping file processing")
-            self._new_files = []
             return body
 
         # Инициализируем кэш для пользователя и сессии, если нужно
@@ -179,14 +177,128 @@ class Pipeline:
                         f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})"
                     )
 
-            self._new_files = new_files
+            # Если есть новые файлы, обрабатываем их и обновляем messages
+            if new_files:
+                logger.info(f"Processing {len(new_files)} new file(s)")
+                try:
+                    # Конвертируем файлы в изображения
+                    image_blocks = await process_files(
+                        new_files,
+                        self.valves.OPENWEBUI_HOST,
+                        self.valves.OPENWEBUI_API_KEY,
+                        self.valves.DPI,
+                    )
 
-            if self._new_files:
-                logger.info(f"Found {len(self._new_files)} new file(s) to process")
-            else:
-                logger.info("No new files to process")
-        else:
-            self._new_files = []
+                    if image_blocks:
+                        logger.info(f"Generated {len(image_blocks)} image block(s)")
+                        # Находим последнее сообщение пользователя
+                        last_user_msg_index = None
+                        for i in range(len(messages) - 1, -1, -1):
+                            if messages[i].get("role") == "user":
+                                last_user_msg_index = i
+                                break
+
+                        if last_user_msg_index is not None:
+                            # Обновляем последнее сообщение пользователя
+                            original_content = messages[last_user_msg_index].get("content", "")
+                            user_text = ""
+                            existing_images = []
+
+                            # Обрабатываем контент в зависимости от типа
+                            if isinstance(original_content, str):
+                                content_normalized = original_content.replace(
+                                    "\r\n", "\n"
+                                ).lstrip()
+
+                                if (
+                                    content_normalized.startswith("### Task:")
+                                    and "</context>" in content_normalized
+                                ):
+                                    user_query = content_normalized.split("</context>", 1)[
+                                        1
+                                    ].lstrip()
+
+                                    lines = user_query.split("\n")
+                                    cleaned_lines = []
+                                    for line in lines:
+                                        if line.strip() or cleaned_lines:
+                                            cleaned_lines.append(line)
+
+                                    user_text = "\n".join(cleaned_lines).rstrip()
+                                    logger.info(
+                                        f"Cleaned OpenWebUI preamble. User query: {user_text!r}"
+                                    )
+                                else:
+                                    user_text = original_content.strip()
+                                    logger.debug(
+                                        f"No OpenWebUI preamble detected. Keeping original content: {user_text!r}"
+                                    )
+                            elif isinstance(original_content, list):
+                                # Если контент уже список, извлекаем текстовые части и существующие изображения
+                                text_parts = []
+                                for item in original_content:
+                                    if isinstance(item, dict):
+                                        if item.get("type") == "text":
+                                            text_parts.append(item.get("text", ""))
+                                        elif item.get("type") == "image_url":
+                                            # Сохраняем существующие изображения
+                                            existing_images.append(item)
+                                user_text = "\n".join(text_parts).strip()
+
+                            # Формируем новый контент: текст + имена файлов + существующие изображения + новые изображения
+                            new_content = []
+
+                            # Добавляем оригинальный текст пользователя, если есть
+                            if user_text:
+                                new_content.append({"type": "text", "text": user_text})
+
+                            # Добавляем имена файлов к сообщению
+                            file_names = [f["name"] for f in new_files]
+                            if file_names:
+                                file_names_text = "\n".join(
+                                    [f"Имя файла: {name}" for name in file_names]
+                                )
+                                new_content.append(
+                                    {"type": "text", "text": file_names_text}
+                                )
+
+                            # Добавляем существующие изображения (если есть)
+                            new_content.extend(existing_images)
+
+                            # Добавляем новые изображения
+                            new_content.extend(image_blocks)
+
+                            # Обновляем сообщение в body['messages']
+                            messages[last_user_msg_index] = {
+                                **messages[last_user_msg_index],
+                                "content": new_content,
+                            }
+                            logger.info(
+                                f"Updated message at index {last_user_msg_index} with {len(image_blocks)} new image(s)"
+                            )
+                        else:
+                            # Если нет сообщения пользователя, создаем новое
+                            file_names = [f["name"] for f in new_files]
+                            file_names_text = (
+                                "\n".join([f"Имя файла: {name}" for name in file_names])
+                                if file_names
+                                else ""
+                            )
+                            content = []
+                            if file_names_text:
+                                content.append({"type": "text", "text": file_names_text})
+                            content.extend(image_blocks)
+                            messages.append({"role": "user", "content": content})
+                            logger.info(
+                                f"Created new user message with {len(image_blocks)} image(s)"
+                            )
+
+                        # Обновляем body с модифицированными сообщениями
+                        body["messages"] = messages
+
+                except Exception as e:
+                    logger.error(f"Error processing files in inlet: {e}", exc_info=True)
+                    # В случае ошибки продолжаем без модификации сообщений
 
         return body
 
@@ -201,14 +313,13 @@ class Pipeline:
     ) -> Union[str, dict]:
         """
         Основной метод обработки запроса через пайплайн.
-        Обрабатывает только новые файлы из self._new_files, преобразует их в base64 изображения,
-        добавляет изображения и имена файлов к последнему сообщению пользователя,
+        Использует уже модифицированные сообщения из body['messages'] (обновленные в inlet),
         формирует сообщения для VLM модели и выполняет OCR.
 
         Args:
             user_message: Сообщение пользователя
             model_id: Идентификатор модели
-            messages: Список сообщений для обработки
+            messages: Список сообщений для обработки (уже модифицированные из inlet)
             body: Тело запроса
 
         Returns:
@@ -217,120 +328,15 @@ class Pipeline:
         logger.info("Starting OCR pipeline")
 
         try:
-            has_system_message = any(msg.get("role") == "system" for msg in messages)
+            # Используем сообщения из body, которые уже были модифицированы в inlet
+            vlm_messages = body.get("messages", messages).copy()
+            
+            has_system_message = any(msg.get("role") == "system" for msg in vlm_messages)
             if not has_system_message:
-                messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
-            logger.info(f"vlm_messages: {messages}")
+                vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+            logger.info(f"vlm_messages: {vlm_messages}")
 
-            if self._new_files:
-                logger.info(f"Processing {len(self._new_files)} new file(s)")
-                image_blocks = asyncio.run(
-                    process_files(
-                        self._new_files,
-                        self.valves.OPENWEBUI_HOST,
-                        self.valves.OPENWEBUI_API_KEY,
-                        self.valves.DPI,
-                    )
-                )
-
-                if image_blocks:
-                    logger.info(f"Generated {len(image_blocks)} image block(s)")
-                    last_user_msg_index = None
-                    for i in range(len(messages) - 1, -1, -1):
-                        if messages[i].get("role") == "user":
-                            last_user_msg_index = i
-                            break
-
-                    if last_user_msg_index is not None:
-                        original_content = messages[last_user_msg_index].get(
-                            "content", ""
-                        )
-                        user_text = ""
-                        existing_images = []
-
-                        # Обрабатываем контент в зависимости от типа
-                        if isinstance(original_content, str):
-                            content_normalized = original_content.replace(
-                                "\r\n", "\n"
-                            ).lstrip()
-
-                            if (
-                                content_normalized.startswith("### Task:")
-                                and "</context>" in content_normalized
-                            ):
-                                user_query = content_normalized.split("</context>", 1)[
-                                    1
-                                ].lstrip()
-
-                                lines = user_query.split("\n")
-                                cleaned_lines = []
-                                for line in lines:
-                                    if line.strip() or cleaned_lines:
-                                        cleaned_lines.append(line)
-
-                                user_text = "\n".join(cleaned_lines).rstrip()
-                                logger.info(
-                                    f"Cleaned OpenWebUI preamble. User query: {user_text!r}"
-                                )
-                            else:
-                                user_text = original_content.strip()
-                                logger.debug(
-                                    f"No OpenWebUI preamble detected. Keeping original content: {user_text!r}"
-                                )
-                        elif isinstance(original_content, list):
-                            # Если контент уже список, извлекаем текстовые части и существующие изображения
-                            text_parts = []
-                            for item in original_content:
-                                if isinstance(item, dict):
-                                    if item.get("type") == "text":
-                                        text_parts.append(item.get("text", ""))
-                                    elif item.get("type") == "image_url":
-                                        # Сохраняем существующие изображения
-                                        existing_images.append(item)
-                            user_text = "\n".join(text_parts).strip()
-
-                        # Формируем новый контент: текст + имена файлов + существующие изображения + новые изображения
-                        new_content = []
-
-                        # Добавляем оригинальный текст пользователя, если есть
-                        if user_text:
-                            new_content.append({"type": "text", "text": user_text})
-
-                        # Добавляем имена файлов к сообщению
-                        file_names = [f["name"] for f in self._new_files]
-                        if file_names:
-                            file_names_text = "\n".join(
-                                [f"Имя файла: {name}" for name in file_names]
-                            )
-                            new_content.append(
-                                {"type": "text", "text": file_names_text}
-                            )
-
-                        # Добавляем существующие изображения (если есть)
-                        new_content.extend(existing_images)
-
-                        # Добавляем новые изображения
-                        new_content.extend(image_blocks)
-
-                        messages[last_user_msg_index] = {
-                            **messages[last_user_msg_index],
-                            "content": new_content,
-                        }
-                    else:
-                        # Если нет сообщения пользователя, создаем новое
-                        file_names = [f["name"] for f in self._new_files]
-                        file_names_text = (
-                            "\n".join([f"Имя файла: {name}" for name in file_names])
-                            if file_names
-                            else ""
-                        )
-                        content = []
-                        if file_names_text:
-                            content.append({"type": "text", "text": file_names_text})
-                        content.extend(image_blocks)
-                        messages.append({"role": "user", "content": content})
-
-            result = self._invoke_vlm(messages)
+            result = self._invoke_vlm(vlm_messages)
             logger.info("OCR pipeline completed successfully")
             return result
 
