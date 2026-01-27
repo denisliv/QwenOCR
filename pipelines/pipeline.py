@@ -200,7 +200,9 @@ class Pipeline:
 
                         if last_user_msg_index is not None:
                             # Обновляем последнее сообщение пользователя
-                            original_content = messages[last_user_msg_index].get("content", "")
+                            original_content = messages[last_user_msg_index].get(
+                                "content", ""
+                            )
                             user_text = ""
                             existing_images = []
 
@@ -214,9 +216,9 @@ class Pipeline:
                                     content_normalized.startswith("### Task:")
                                     and "</context>" in content_normalized
                                 ):
-                                    user_query = content_normalized.split("</context>", 1)[
-                                        1
-                                    ].lstrip()
+                                    user_query = content_normalized.split(
+                                        "</context>", 1
+                                    )[1].lstrip()
 
                                     lines = user_query.split("\n")
                                     cleaned_lines = []
@@ -286,7 +288,9 @@ class Pipeline:
                             )
                             content = []
                             if file_names_text:
-                                content.append({"type": "text", "text": file_names_text})
+                                content.append(
+                                    {"type": "text", "text": file_names_text}
+                                )
                             content.extend(image_blocks)
                             messages.append({"role": "user", "content": content})
                             logger.info(
@@ -330,8 +334,10 @@ class Pipeline:
         try:
             # Используем сообщения из body, которые уже были модифицированы в inlet
             vlm_messages = body.get("messages", messages).copy()
-            
-            has_system_message = any(msg.get("role") == "system" for msg in vlm_messages)
+
+            has_system_message = any(
+                msg.get("role") == "system" for msg in vlm_messages
+            )
             if not has_system_message:
                 vlm_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
             logger.info(f"vlm_messages: {vlm_messages}")
