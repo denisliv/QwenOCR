@@ -77,7 +77,6 @@ def pdf_to_base64_images(
 
 async def process_files(
     file_urls: list[dict],
-    cache: dict,
     openwebui_host: str,
     openwebui_token: str,
     dpi: int,
@@ -85,12 +84,11 @@ async def process_files(
     """
     Асинхронно обрабатывает список файлов: загружает каждый файл по URL
     и конвертирует PDF в base64-кодированные изображения.
-    Использует кэш для избежания повторной загрузки и конвертации файлов.
+    Кэш изображений не используется, так как изображения хранятся в истории сообщений.
 
     Args:
         file_urls: Список словарей с информацией о файлах.
                    Каждый словарь должен содержать ключи 'url' и 'name'
-        cache: Словарь для кэширования результатов. Ключ: url (строка), Значение: list[dict] (список image_blocks)
         openwebui_host: Базовый URL хоста OpenWebUI
         openwebui_token: Токен авторизации для доступа к API OpenWebUI
         dpi: Разрешение для конвертации PDF в изображения
@@ -111,16 +109,10 @@ async def process_files(
         url = f"{openwebui_host}{file_meta['url']}/content"
         filename = file_meta.get("name", "unknown.pdf")
 
-        if url in cache:
-            logger.info(f"Using cached images for file {filename} (url: {url})")
-            all_image_blocks.extend(cache[url])
-            continue
-
         try:
             content = await download_file(url, headers)
             image_blocks = pdf_to_base64_images(content, filename, dpi)
-            cache[url] = image_blocks
-            logger.info(f"Cached images for file {filename} (url: {url})")
+            logger.info(f"Processed file {filename} ({len(image_blocks)} pages)")
             all_image_blocks.extend(image_blocks)
         except Exception as e:
             logger.error(f"Exception processing file {filename}: {e}")
