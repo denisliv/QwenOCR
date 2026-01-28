@@ -15,7 +15,7 @@ pipelines_dir = os.path.dirname(__file__)
 if pipelines_dir not in sys.path:
     sys.path.insert(0, pipelines_dir)
 
-from typing import List, Optional, Union
+from typing import Generator, List, Optional, Union
 
 from langchain_openai import ChatOpenAI
 from ocr_utils.config import AppConfig
@@ -100,20 +100,38 @@ class Pipeline:
         """
         logger.info("OCR Assistant shutting down...")
 
-    def _invoke_vlm(self, messages: list[str] | None) -> str:
+    def _invoke_vlm(
+        self, messages: Optional[List[dict]], stream: bool = False
+    ) -> Union[str, Generator[str, None, None]]:
         """
-        Выполняет вызов VLM модели для обработки сообщений и возвращает результат.
+        Выполняет вызов VLM модели для обработки сообщений.
+        В обычном режиме возвращает строку, в stream-режиме — генератор токенов.
 
         Args:
             messages: Список сообщений для обработки VLM моделью
 
         Returns:
-            Строка с результатом обработки от VLM модели
+            В обычном режиме: строка с результатом обработки от VLM модели.
+            В stream-режиме: генератор, по которому можно итерироваться для получения токенов.
         """
-        resp = self.vlm.invoke(messages)
-        result = parser.invoke(resp)
-        logger.info("VLM invocation completed")
-        return result
+        if not stream:
+            resp = self.vlm.invoke(messages)
+            result = parser.invoke(resp)
+            logger.info("VLM invocation completed")
+            return result
+
+        def _stream() -> Generator[str, None, None]:
+            logger.info("Starting VLM streaming invocation")
+            try:
+                for chunk in self.vlm.stream(messages):
+                    # В ChatOpenAI чанки имеют поле .content с текстом
+                    text = getattr(chunk, "content", None)
+                    if isinstance(text, str) and text:
+                        yield text
+            finally:
+                logger.info("VLM streaming invocation completed")
+
+        return _stream()
 
     async def inlet(self, body: dict, user: dict) -> dict:
         """
@@ -359,7 +377,9 @@ class Pipeline:
         """
         return body
 
-    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, dict]:
+    def pipe(
+        self, user_message: str, model_id: str, messages: List[dict], body: dict
+    ) -> Union[str, Generator[str, None, None]]:
         """
         Основной метод обработки запроса через пайплайн.
         Выполняет только вызов VLM модели с подготовленными сообщениями.
@@ -371,7 +391,8 @@ class Pipeline:
             body: Тело запроса
 
         Returns:
-            Результат обработки от VLM модели или сообщение об ошибке
+            В обычном режиме: строка с результатом обработки от VLM модели или сообщение об ошибке.
+            В stream-режиме: генератор строк (токенов/фрагментов), совместимый с OpenWebUI Pipelines.
         """
         logger.info("Starting OCR pipeline")
         try:
@@ -395,7 +416,17 @@ class Pipeline:
             if not has_system_message:
                 messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
-            result = self._invoke_vlm(messages)
+            # OpenAI-совместимый клиент (OpenWebUI) передает флаг stream в теле запроса.
+            stream = bool(body.get("stream"))
+
+            if stream:
+                logger.info("Streaming mode enabled for OCR pipeline")
+                result_gen = self._invoke_vlm(messages, stream=True)
+                body["messages"] = messages
+                # Возвращаем генератор, чтобы Pipelines мог стримить ответ в OpenWebUI
+                return result_gen
+
+            result = self._invoke_vlm(messages, stream=False)
             body["messages"] = messages
             logger.info("OCR pipeline completed successfully")
             return result
