@@ -7,7 +7,9 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
+    formatter = logging.Formatter(
+        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
+    )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -70,10 +72,16 @@ class Pipeline:
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
+                "VLM_MODEL_NAME": os.getenv(
+                    "VLM_MODEL_NAME", self.config.vlm_model_name
+                ),
                 "DPI": os.getenv("DPI", self.config.dpi),
-                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
-                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
+                "OPENWEBUI_HOST": os.getenv(
+                    "OPENWEBUI_HOST", self.config.openwebui_host
+                ),
+                "OPENWEBUI_API_KEY": os.getenv(
+                    "OPENWEBUI_API_KEY", self.config.openwebui_token
+                ),
             }
         )
 
@@ -185,7 +193,8 @@ class Pipeline:
                 f
                 for f in files
                 if f.get("file", {}).get("data", {}).get("status") == "completed"
-                and f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"
+                and f.get("file", {}).get("meta", {}).get("content_type")
+                == "application/pdf"
             ]
 
             # Определяем новые файлы (те, которые еще не были обработаны)
@@ -201,11 +210,15 @@ class Pipeline:
                         }
                     )
                     processed_file_ids.add(file_id)
-                    logger.info(f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})")
+                    logger.info(
+                        f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})"
+                    )
 
             # Обрабатываем новые файлы и сохраняем в кэш
             if new_files and current_message_id:
-                logger.info(f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}")
+                logger.info(
+                    f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}"
+                )
                 files_images = await process_files(
                     new_files,
                     self.valves.OPENWEBUI_HOST,
@@ -230,17 +243,23 @@ class Pipeline:
                         "images": image_blocks,
                     }
                     file_cache_session[file_id] = file_cache_entry
-                    logger.info(f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images")
+                    logger.info(
+                        f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
+                    )
 
         # Обновляем все сообщения пользователя, добавляя изображения и имена файлов
         # Это нужно делать всегда, даже если нет новых файлов, чтобы восстановить изображения из кэша
         # (так как OpenWebUI заменяет историю на свою без прикрепленных изображений)
-        updated_messages = self._update_messages_with_files(messages, file_cache_session, message_order)
+        updated_messages = self._update_messages_with_files(
+            messages, file_cache_session, message_order
+        )
         body["messages"] = updated_messages
 
         return body
 
-    def _update_messages_with_files(self, messages: List[dict], file_cache: dict, message_order: List[str]) -> List[dict]:
+    def _update_messages_with_files(
+        self, messages: List[dict], file_cache: dict, message_order: List[str]
+    ) -> List[dict]:
         """
         Обновляет все сообщения пользователя, добавляя изображения и имена файлов
         к соответствующим сообщениям на основе кэша файлов и порядка появления message_id.
@@ -260,23 +279,25 @@ class Pipeline:
             msg_id = file_data["message_id"]
             if msg_id not in files_by_message:
                 files_by_message[msg_id] = []
-            files_by_message[msg_id].append({
-                "file_id": file_id,
-                "filename": file_data["filename"],
-                "images": file_data["images"],
-            })
+            files_by_message[msg_id].append(
+                {
+                    "file_id": file_id,
+                    "filename": file_data["filename"],
+                    "images": file_data["images"],
+                }
+            )
 
         # Отслеживаем порядковый номер сообщений пользователя для сопоставления с файлами
         user_message_index = 0
         updated_messages = []
-        
+
         for msg in messages:
             if msg.get("role") != "user":
                 updated_messages.append(msg)
                 continue
 
             msg_content = msg.get("content", "")
-            
+
             # Обрабатываем контент в зависимости от типа (логика очистки сообщений)
             user_text = ""
             existing_images = []
@@ -317,18 +338,18 @@ class Pipeline:
             if user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
-                
+
                 # Добавляем имена файлов и изображения для файлов этого сообщения
                 for file_info in files_for_this_message:
                     filename = file_info["filename"]
                     images = file_info["images"]
-                    
+
                     # Добавляем имя файла, если его еще нет
                     if filename not in existing_file_names:
                         file_name_text = f"Имя файла: {filename}"
                         new_content.append({"type": "text", "text": file_name_text})
                         existing_file_names.add(filename)
-                    
+
                     # Добавляем изображения для этого файла
                     new_content.extend(images)
 
@@ -409,8 +430,14 @@ class Pipeline:
                     msg["content"] = self._strip_task_context_from_message(content)
                 elif isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
-                            item["text"] = self._strip_task_context_from_message(item["text"])
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "text"
+                            and isinstance(item.get("text"), str)
+                        ):
+                            item["text"] = self._strip_task_context_from_message(
+                                item["text"]
+                            )
                 break
 
             has_system_message = any(msg.get("role") == "system" for msg in messages)
@@ -434,7 +461,14 @@ class Pipeline:
 
         except ValueError as e:
             logger.exception("Validation error during processing")
-            return f"Validation error: {str(e)}"
+            return f"Ошибка: {str(e)}"
         except Exception as e:
             logger.exception("Unexpected error in OCR pipeline")
-            return f"Internal processing error: {str(e)}"
+            error_text = str(e)
+            # Специальная обработка ошибок превышения контекста модели
+            if "decoder prompt" in error_text and "maximum model length" in error_text:
+                return (
+                    "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
+                    "Пожалуйста, начните новый чат или сократите текст текущего запроса."
+                )
+            return f"Ошибка: {error_text}"
