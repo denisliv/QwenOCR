@@ -186,7 +186,6 @@ class Pipeline:
 
             # Обрабатываем новые файлы и сохраняем в кэш
             if new_files and current_message_id:
-                has_new_files = True
                 logger.info(f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}")
                 files_images = await process_files(
                     new_files,
@@ -265,17 +264,7 @@ class Pipeline:
             existing_file_names = set()
 
             if isinstance(msg_content, str):
-                content_normalized = msg_content.replace("\r\n", "\n").lstrip()
-                if content_normalized.startswith("### Task:") and "</context>" in content_normalized:
-                    user_query = content_normalized.split("</context>", 1)[1].lstrip()
-                    lines = user_query.split("\n")
-                    cleaned_lines = []
-                    for line in lines:
-                        if line.strip() or cleaned_lines:
-                            cleaned_lines.append(line)
-                    user_text = "\n".join(cleaned_lines).rstrip()
-                else:
-                    user_text = msg_content.strip()
+                user_text = msg_content.strip()
             elif isinstance(msg_content, list):
                 # Если контент уже список, извлекаем текстовые части и существующие изображения
                 text_parts = []
@@ -336,6 +325,34 @@ class Pipeline:
 
         return updated_messages
 
+    @staticmethod
+    def _strip_task_context_from_message(text: str) -> str:
+        """
+        Удаляет служебный префикс OpenWebUI/агента, если сообщение начинается с "### Task:"
+        и содержит закрывающий тег "</context>".
+
+        Пример:
+            ### Task: ...
+            ...
+            </context>
+            <user text>
+        """
+        if not isinstance(text, str) or not text:
+            return text
+
+        normalized = text.replace("\r\n", "\n").lstrip()
+        if not (normalized.startswith("### Task:") and "</context>" in normalized):
+            return text.strip()
+
+        user_query = normalized.split("</context>", 1)[1].lstrip()
+        # Убираем ведущие пустые строки, но сохраняем последующую структуру
+        lines = user_query.split("\n")
+        cleaned_lines: list[str] = []
+        for line in lines:
+            if line.strip() or cleaned_lines:
+                cleaned_lines.append(line)
+        return "\n".join(cleaned_lines).rstrip()
+
     async def outlet(self, body: dict, user: Optional[dict] = None) -> dict:
         """
         Обрабатывает исходящий ответ после получения результата от API.
@@ -358,6 +375,22 @@ class Pipeline:
         """
         logger.info("Starting OCR pipeline")
         try:
+            # OpenWebUI иногда добавляет служебный контекст "### Task: ... </context>" перед текстом пользователя.
+            # Чистим это здесь, чтобы upstream-логика (inlet/_update_messages_with_files) не занималась этим.
+            # Обновляем последнее сообщение пользователя в messages, если оно строковое
+            # или содержит текстовые блоки.
+            for msg in reversed(messages):
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str):
+                    msg["content"] = self._strip_task_context_from_message(content)
+                elif isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                            item["text"] = self._strip_task_context_from_message(item["text"])
+                break
+
             has_system_message = any(msg.get("role") == "system" for msg in messages)
             if not has_system_message:
                 messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
