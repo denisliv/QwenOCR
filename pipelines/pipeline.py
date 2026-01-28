@@ -115,10 +115,20 @@ class Pipeline:
         """
         if not stream:
             logger.info("Starting VLM invocation")
-            resp = self.vlm.invoke(messages)
-            result = parser.invoke(resp)
-            logger.info("VLM invocation completed")
-            return result
+            try:
+                resp = self.vlm.invoke(messages)
+                result = parser.invoke(resp)
+                logger.info("VLM invocation completed")
+                return result
+            except Exception as e:
+                logger.exception("Error during VLM invocation")
+                error_text = str(e)
+                if "decoder prompt" in error_text and "maximum model length" in error_text:
+                    return (
+                        "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
+                        "Пожалуйста, начните новый чат или сократите текст текущего запроса."
+                    )
+                return f"Ошибка: {error_text}"
 
         def _stream() -> Generator[str, None, None]:
             logger.info("Starting VLM streaming invocation")
@@ -127,6 +137,16 @@ class Pipeline:
                     text = getattr(chunk, "content", None)
                     if isinstance(text, str) and text:
                         yield text
+            except Exception as e:
+                logger.exception("Error during VLM streaming invocation")
+                error_text = str(e)
+                if "decoder prompt" in error_text and "maximum model length" in error_text:
+                    yield (
+                        "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
+                        "Пожалуйста, начните новый чат или сократите текст текущего запроса."
+                    )
+                else:
+                    yield f"Ошибка: {error_text}"
             finally:
                 logger.info("VLM streaming invocation completed")
 
@@ -393,10 +413,4 @@ class Pipeline:
             return f"Ошибка: {str(e)}"
         except Exception as e:
             logger.exception("Unexpected error in OCR pipeline")
-            error_text = str(e)
-            if "decoder prompt" in error_text and "maximum model length" in error_text:
-                return (
-                    "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
-                    "Пожалуйста, начните новый чат или сократите текст текущего запроса."
-                )
-            return f"Ошибка: {error_text}"
+            return f"Ошибка: {str(e)}"
