@@ -7,9 +7,7 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -72,16 +70,10 @@ class Pipeline:
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv(
-                    "VLM_MODEL_NAME", self.config.vlm_model_name
-                ),
+                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
                 "DPI": os.getenv("DPI", self.config.dpi),
-                "OPENWEBUI_HOST": os.getenv(
-                    "OPENWEBUI_HOST", self.config.openwebui_host
-                ),
-                "OPENWEBUI_API_KEY": os.getenv(
-                    "OPENWEBUI_API_KEY", self.config.openwebui_token
-                ),
+                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
+                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
             }
         )
 
@@ -108,21 +100,21 @@ class Pipeline:
         """
         logger.info("OCR Assistant shutting down...")
 
-    def _invoke_vlm(
-        self, messages: Optional[List[dict]], stream: bool = False
-    ) -> Union[str, Generator[str, None, None]]:
+    def _invoke_vlm(self, messages: Optional[List[dict]], stream: bool = False) -> Union[str, Generator[str, None, None]]:
         """
         Выполняет вызов VLM модели для обработки сообщений.
         В обычном режиме возвращает строку, в stream-режиме — генератор токенов.
 
         Args:
             messages: Список сообщений для обработки VLM моделью
+            stream: True или False
 
         Returns:
             В обычном режиме: строка с результатом обработки от VLM модели.
             В stream-режиме: генератор, по которому можно итерироваться для получения токенов.
         """
         if not stream:
+            logger.info("Starting VLM invocation")
             resp = self.vlm.invoke(messages)
             result = parser.invoke(resp)
             logger.info("VLM invocation completed")
@@ -132,7 +124,6 @@ class Pipeline:
             logger.info("Starting VLM streaming invocation")
             try:
                 for chunk in self.vlm.stream(messages):
-                    # В ChatOpenAI чанки имеют поле .content с текстом
                     text = getattr(chunk, "content", None)
                     if isinstance(text, str) and text:
                         yield text
@@ -159,7 +150,6 @@ class Pipeline:
         metadata = body.get("metadata", {})
         messages = body.get("messages", [])
         user_id = metadata.get("user_id") or user.get("id")
-        # Для привязки кэша используем chat_id вместо session_id
         chat_id = metadata.get("chat_id")
         current_message_id = metadata.get("message_id")
 
@@ -167,7 +157,6 @@ class Pipeline:
             logger.warning("Missing user_id or chat_id, skipping file processing")
             return body
 
-        # Инициализируем кэши для пользователя и чата, если нужно
         if user_id not in self._processed_files_cache:
             self._processed_files_cache[user_id] = {}
         if chat_id not in self._processed_files_cache[user_id]:
@@ -187,17 +176,9 @@ class Pipeline:
         file_cache_session = self._file_cache[user_id][chat_id]
         message_order = self._message_order_cache[user_id][chat_id]
 
-        # Определяем и обрабатываем новые файлы
         if files:
-            pdf_valid_files = [
-                f
-                for f in files
-                if f.get("file", {}).get("data", {}).get("status") == "completed"
-                and f.get("file", {}).get("meta", {}).get("content_type")
-                == "application/pdf"
-            ]
+            pdf_valid_files = [f for f in files if f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"]
 
-            # Определяем новые файлы (те, которые еще не были обработаны)
             new_files = []
             for f in pdf_valid_files:
                 file_id = f.get("id") or f.get("file", {}).get("id")
@@ -210,15 +191,10 @@ class Pipeline:
                         }
                     )
                     processed_file_ids.add(file_id)
-                    logger.info(
-                        f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})"
-                    )
+                    logger.info(f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})")
 
-            # Обрабатываем новые файлы и сохраняем в кэш
             if new_files and current_message_id:
-                logger.info(
-                    f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}"
-                )
+                logger.info(f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}")
                 files_images = await process_files(
                     new_files,
                     self.valves.OPENWEBUI_HOST,
@@ -226,16 +202,13 @@ class Pipeline:
                     self.valves.DPI,
                 )
 
-                # Добавляем message_id в порядок появления, если его еще нет
                 if current_message_id not in message_order:
                     message_order.append(current_message_id)
                     logger.info(f"Added message_id {current_message_id} to order cache")
 
-                # Сохраняем каждый файл в кэш с текущим message_id
                 for file_meta in new_files:
                     file_id = file_meta["id"]
                     filename = file_meta["name"]
-                    # Получаем изображения для этого конкретного файла
                     image_blocks = files_images.get(file_id, [])
                     file_cache_entry = {
                         "message_id": current_message_id,
@@ -247,19 +220,12 @@ class Pipeline:
                         f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
                     )
 
-        # Обновляем все сообщения пользователя, добавляя изображения и имена файлов
-        # Это нужно делать всегда, даже если нет новых файлов, чтобы восстановить изображения из кэша
-        # (так как OpenWebUI заменяет историю на свою без прикрепленных изображений)
-        updated_messages = self._update_messages_with_files(
-            messages, file_cache_session, message_order
-        )
+        updated_messages = self._update_messages_with_files(messages, file_cache_session, message_order)
         body["messages"] = updated_messages
 
         return body
 
-    def _update_messages_with_files(
-        self, messages: List[dict], file_cache: dict, message_order: List[str]
-    ) -> List[dict]:
+    def _update_messages_with_files(self, messages: List[dict], file_cache: dict, message_order: List[str]) -> List[dict]:
         """
         Обновляет все сообщения пользователя, добавляя изображения и имена файлов
         к соответствующим сообщениям на основе кэша файлов и порядка появления message_id.
@@ -272,8 +238,6 @@ class Pipeline:
         Returns:
             Обновленный список сообщений
         """
-        # Создаем словарь для быстрого поиска файлов по message_id
-        # {message_id: [{file_id, filename, images}, ...]}
         files_by_message = {}
         for file_id, file_data in file_cache.items():
             msg_id = file_data["message_id"]
@@ -287,7 +251,6 @@ class Pipeline:
                 }
             )
 
-        # Отслеживаем порядковый номер сообщений пользователя для сопоставления с файлами
         user_message_index = 0
         updated_messages = []
 
@@ -298,7 +261,6 @@ class Pipeline:
 
             msg_content = msg.get("content", "")
 
-            # Обрабатываем контент в зависимости от типа (логика очистки сообщений)
             user_text = ""
             existing_images = []
             existing_file_names = set()
@@ -306,17 +268,13 @@ class Pipeline:
             if isinstance(msg_content, str):
                 user_text = msg_content.strip()
             elif isinstance(msg_content, list):
-                # Если контент уже список, извлекаем текстовые части и существующие изображения
                 text_parts = []
                 for item in msg_content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
                             text = item.get("text", "")
                             text_parts.append(text)
-                            # Проверяем, есть ли уже имя файла в тексте
-                            # Может быть несколько "Имя файла:" в одном тексте
                             if "Имя файла:" in text:
-                                # Извлекаем все имена файлов из текста
                                 for line in text.split("\n"):
                                     if "Имя файла:" in line:
                                         filename = line.split("Имя файла:")[-1].strip()
@@ -326,34 +284,26 @@ class Pipeline:
                             existing_images.append(item)
                 user_text = "\n".join(text_parts).strip()
 
-            # Формируем новый контент
             new_content = []
 
-            # Добавляем оригинальный текст пользователя, если есть
             if user_text:
                 new_content.append({"type": "text", "text": user_text})
 
-            # Определяем, какие файлы относятся к текущему сообщению пользователя
-            # Используем порядковый номер сообщения пользователя и порядок появления message_id
             if user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
 
-                # Добавляем имена файлов и изображения для файлов этого сообщения
                 for file_info in files_for_this_message:
                     filename = file_info["filename"]
                     images = file_info["images"]
 
-                    # Добавляем имя файла, если его еще нет
                     if filename not in existing_file_names:
                         file_name_text = f"Имя файла: {filename}"
                         new_content.append({"type": "text", "text": file_name_text})
                         existing_file_names.add(filename)
 
-                    # Добавляем изображения для этого файла
                     new_content.extend(images)
 
-            # Добавляем существующие изображения (если есть)
             new_content.extend(existing_images)
 
             updated_msg = {
@@ -370,12 +320,6 @@ class Pipeline:
         """
         Удаляет служебный префикс OpenWebUI/агента, если сообщение начинается с "### Task:"
         и содержит закрывающий тег "</context>".
-
-        Пример:
-            ### Task: ...
-            ...
-            </context>
-            <user text>
         """
         if not isinstance(text, str) or not text:
             return text
@@ -385,7 +329,6 @@ class Pipeline:
             return text.strip()
 
         user_query = normalized.split("</context>", 1)[1].lstrip()
-        # Убираем ведущие пустые строки, но сохраняем последующую структуру
         lines = user_query.split("\n")
         cleaned_lines: list[str] = []
         for line in lines:
@@ -399,17 +342,15 @@ class Pipeline:
         """
         return body
 
-    def pipe(
-        self, user_message: str, model_id: str, messages: List[dict], body: dict
-    ) -> Union[str, Generator[str, None, None]]:
+    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator[str, None, None]]:
         """
         Основной метод обработки запроса через пайплайн.
-        Выполняет только вызов VLM модели с подготовленными сообщениями.
+        Выполняет вызов VLM модели с подготовленными сообщениями.
 
         Args:
             user_message: Сообщение пользователя
             model_id: Идентификатор модели
-            messages: Список сообщений для обработки (уже обновлены в inlet)
+            messages: Список сообщений для обработки
             body: Тело запроса
 
         Returns:
@@ -418,10 +359,6 @@ class Pipeline:
         """
         logger.info("Starting OCR pipeline")
         try:
-            # OpenWebUI иногда добавляет служебный контекст "### Task: ... </context>" перед текстом пользователя.
-            # Чистим это здесь, чтобы upstream-логика (inlet/_update_messages_with_files) не занималась этим.
-            # Обновляем последнее сообщение пользователя в messages, если оно строковое
-            # или содержит текстовые блоки.
             for msg in reversed(messages):
                 if msg.get("role") != "user":
                     continue
@@ -430,28 +367,20 @@ class Pipeline:
                     msg["content"] = self._strip_task_context_from_message(content)
                 elif isinstance(content, list):
                     for item in content:
-                        if (
-                            isinstance(item, dict)
-                            and item.get("type") == "text"
-                            and isinstance(item.get("text"), str)
-                        ):
-                            item["text"] = self._strip_task_context_from_message(
-                                item["text"]
-                            )
+                        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                            item["text"] = self._strip_task_context_from_message(item["text"])
                 break
 
             has_system_message = any(msg.get("role") == "system" for msg in messages)
             if not has_system_message:
                 messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
-            # OpenAI-совместимый клиент (OpenWebUI) передает флаг stream в теле запроса.
             stream = bool(body.get("stream"))
 
             if stream:
                 logger.info("Streaming mode enabled for OCR pipeline")
                 result_gen = self._invoke_vlm(messages, stream=True)
                 body["messages"] = messages
-                # Возвращаем генератор, чтобы Pipelines мог стримить ответ в OpenWebUI
                 return result_gen
 
             result = self._invoke_vlm(messages, stream=False)
@@ -465,7 +394,6 @@ class Pipeline:
         except Exception as e:
             logger.exception("Unexpected error in OCR pipeline")
             error_text = str(e)
-            # Специальная обработка ошибок превышения контекста модели
             if "decoder prompt" in error_text and "maximum model length" in error_text:
                 return (
                     "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
