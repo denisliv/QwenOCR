@@ -58,11 +58,11 @@ class Pipeline:
         self.description = "Пайплайн OCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
         self.vlm = None
-        # Кэш изображений и метаданных: {user_id: {session_id: {file_id: {message_id: str, filename: str, images: list[dict]}}}}
+        # Кэш изображений и метаданных: {user_id: {chat_id: {file_id: {message_id: str, filename: str, images: list[dict]}}}}
         self._file_cache = {}
-        # Кэш обработанных file_id для быстрой проверки: {user_id: {session_id: set([file_id1, file_id2, ...])}}
+        # Кэш обработанных file_id для быстрой проверки: {user_id: {chat_id: set([file_id1, file_id2, ...])}}
         self._processed_files_cache = {}
-        # Порядок появления message_id для правильного сопоставления с сообщениями: {user_id: {session_id: [message_id1, message_id2, ...]}}
+        # Порядок появления message_id для правильного сопоставления с сообщениями: {user_id: {chat_id: [message_id1, message_id2, ...]}}
         self._message_order_cache = {}
 
         self.valves = self.Valves(
@@ -151,32 +151,33 @@ class Pipeline:
         metadata = body.get("metadata", {})
         messages = body.get("messages", [])
         user_id = metadata.get("user_id") or user.get("id")
-        session_id = metadata.get("session_id")
+        # Для привязки кэша используем chat_id вместо session_id
+        chat_id = metadata.get("chat_id")
         current_message_id = metadata.get("message_id")
 
-        if not user_id or not session_id:
-            logger.warning("Missing user_id or session_id, skipping file processing")
+        if not user_id or not chat_id:
+            logger.warning("Missing user_id or chat_id, skipping file processing")
             return body
 
-        # Инициализируем кэши для пользователя и сессии, если нужно
+        # Инициализируем кэши для пользователя и чата, если нужно
         if user_id not in self._processed_files_cache:
             self._processed_files_cache[user_id] = {}
-        if session_id not in self._processed_files_cache[user_id]:
-            self._processed_files_cache[user_id][session_id] = set()
+        if chat_id not in self._processed_files_cache[user_id]:
+            self._processed_files_cache[user_id][chat_id] = set()
 
         if user_id not in self._file_cache:
             self._file_cache[user_id] = {}
-        if session_id not in self._file_cache[user_id]:
-            self._file_cache[user_id][session_id] = {}
+        if chat_id not in self._file_cache[user_id]:
+            self._file_cache[user_id][chat_id] = {}
 
         if user_id not in self._message_order_cache:
             self._message_order_cache[user_id] = {}
-        if session_id not in self._message_order_cache[user_id]:
-            self._message_order_cache[user_id][session_id] = []
+        if chat_id not in self._message_order_cache[user_id]:
+            self._message_order_cache[user_id][chat_id] = []
 
-        processed_file_ids = self._processed_files_cache[user_id][session_id]
-        file_cache_session = self._file_cache[user_id][session_id]
-        message_order = self._message_order_cache[user_id][session_id]
+        processed_file_ids = self._processed_files_cache[user_id][chat_id]
+        file_cache_session = self._file_cache[user_id][chat_id]
+        message_order = self._message_order_cache[user_id][chat_id]
 
         # Определяем и обрабатываем новые файлы
         if files:
