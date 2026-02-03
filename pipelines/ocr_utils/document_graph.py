@@ -179,6 +179,18 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
     updated = pipeline._update_messages_with_files(messages, file_cache_session, message_order)
     body["messages"] = updated
     logger.info(f"Updated messages count: {len(updated)}")
+    # Логируем, какие сообщения получили файлы
+    for msg in updated:
+        if msg.get("role") == "user":
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                has_files = any(
+                    item.get("type") == "image_url" or 
+                    (item.get("type") == "text" and "Имя файла:" in item.get("text", ""))
+                    for item in content
+                )
+                if has_files:
+                    logger.info(f"Message {msg.get('id')} has files attached")
     return {"body": body}
 
 

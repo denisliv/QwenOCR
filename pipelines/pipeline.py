@@ -215,9 +215,21 @@ class Pipeline:
             logger.warning("Missing user_id or chat_id, skipping file processing")
             return body
 
+        logger.info(
+            f"Inlet: received {len(messages)} messages, current_message_id: {current_message_id}"
+        )
+        logger.info(
+            f"Inlet: user messages IDs: {[m.get('id') for m in messages if m.get('role') == 'user']}"
+        )
+
         processed_file_ids, file_cache_session, message_order = (
             self._ensure_cache_initialized(user_id, chat_id)
         )
+
+        logger.info(
+            f"Inlet: file_cache_session has {len(file_cache_session)} cached files"
+        )
+        logger.info(f"Inlet: message_order: {message_order}")
 
         initial_state = {
             "body": body,
@@ -410,8 +422,12 @@ class Pipeline:
                     "ocr_markdown": file_data.get("ocr_markdown"),
                 }
             )
-        logger.info(f"_update_messages_with_files: file_cache has {len(file_cache)} entries")
-        logger.info(f"_update_messages_with_files: files_by_message keys: {list(files_by_message.keys())}")
+        logger.info(
+            f"_update_messages_with_files: file_cache has {len(file_cache)} entries"
+        )
+        logger.info(
+            f"_update_messages_with_files: files_by_message keys: {list(files_by_message.keys())}"
+        )
         logger.info(f"_update_messages_with_files: message_order: {message_order}")
 
         user_message_index = 0
@@ -455,14 +471,20 @@ class Pipeline:
             msg_id = msg.get("id")
             if msg_id is not None:
                 files_for_this_message = files_by_message.get(msg_id, [])
-                logger.debug(f"Message {msg_id}: found {len(files_for_this_message)} files by msg_id")
+                logger.debug(
+                    f"Message {msg_id}: found {len(files_for_this_message)} files by msg_id"
+                )
             elif user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
-                logger.debug(f"Message (no id, index {user_message_index}): using target_message_id {target_message_id}, found {len(files_for_this_message)} files")
+                logger.debug(
+                    f"Message (no id, index {user_message_index}): using target_message_id {target_message_id}, found {len(files_for_this_message)} files"
+                )
             else:
                 files_for_this_message = []
-                logger.debug(f"Message (no id, index {user_message_index}): no files found")
+                logger.debug(
+                    f"Message (no id, index {user_message_index}): no files found"
+                )
 
             ocr_parts = [
                 (f["filename"], f["ocr_markdown"])
@@ -566,8 +588,15 @@ class Pipeline:
             В stream-режиме: генератор строк (токенов/фрагментов), совместимый с OpenWebUI Pipelines.
         """
         logger.info("Starting OCR pipeline")
+        updated_messages = body.get("messages", messages)
+        if updated_messages != messages:
+            logger.info(
+                f"Using updated messages from body: {len(updated_messages)} messages (original had {len(messages)})"
+            )
+        else:
+            logger.info(f"Using original messages: {len(messages)} messages")
         try:
-            for msg in reversed(messages):
+            for msg in reversed(updated_messages):
                 if msg.get("role") != "user":
                     continue
                 content = msg.get("content")
@@ -585,20 +614,22 @@ class Pipeline:
                             )
                 break
 
-            has_system_message = any(msg.get("role") == "system" for msg in messages)
+            has_system_message = any(
+                msg.get("role") == "system" for msg in updated_messages
+            )
             if not has_system_message:
-                messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+                updated_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
             stream = bool(body.get("stream"))
 
             if stream:
                 logger.info("Streaming mode enabled for OCR pipeline")
-                result_gen = self._invoke_vlm(messages, stream=True)
-                body["messages"] = messages
+                result_gen = self._invoke_vlm(updated_messages, stream=True)
+                body["messages"] = updated_messages
                 return result_gen
 
-            result = self._invoke_vlm(messages, stream=False)
-            body["messages"] = messages
+            result = self._invoke_vlm(updated_messages, stream=False)
+            body["messages"] = updated_messages
             logger.info("OCR pipeline completed successfully")
             return result
 
