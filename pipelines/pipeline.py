@@ -594,15 +594,8 @@ class Pipeline:
             В stream-режиме: генератор строк (токенов/фрагментов), совместимый с OpenWebUI Pipelines.
         """
         logger.info("Starting OCR pipeline")
-        updated_messages = body.get("messages", messages)
-        if updated_messages != messages:
-            logger.info(
-                f"Using updated messages from body: {len(updated_messages)} messages (original had {len(messages)})"
-            )
-        else:
-            logger.info(f"Using original messages: {len(messages)} messages")
         try:
-            for msg in reversed(updated_messages):
+            for msg in reversed(messages):
                 if msg.get("role") != "user":
                     continue
                 content = msg.get("content")
@@ -621,21 +614,21 @@ class Pipeline:
                 break
 
             has_system_message = any(
-                msg.get("role") == "system" for msg in updated_messages
+                msg.get("role") == "system" for msg in messages
             )
             if not has_system_message:
-                updated_messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
+                messages.insert(0, {"role": "system", "content": SYSTEM_PROMPT})
 
             stream = bool(body.get("stream"))
 
             if stream:
                 logger.info("Streaming mode enabled for OCR pipeline")
-                result_gen = self._invoke_vlm(updated_messages, stream=True)
-                body["messages"] = updated_messages
+                result_gen = self._invoke_vlm(messages, stream=True)
+                body["messages"] = messages
                 return result_gen
 
-            result = self._invoke_vlm(updated_messages, stream=False)
-            body["messages"] = updated_messages
+            result = self._invoke_vlm(messages, stream=False)
+            body["messages"] = messages
             logger.info("OCR pipeline completed successfully")
             return result
 
