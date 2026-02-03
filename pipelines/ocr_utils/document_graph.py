@@ -7,7 +7,6 @@ import logging
 from typing import Literal
 
 from langgraph.graph import END, StateGraph
-
 from ocr_utils.file_utils import process_pdf_to_base64_images
 from ocr_utils.state import DocumentProcessingState
 
@@ -39,21 +38,19 @@ def _detect_new_files_node(state: DocumentProcessingState) -> dict:
     current_message_id = state.get("current_message_id")
     message_order = state.get("message_order") or []
 
-    pdf_valid = [
-        f
-        for f in files
-        if (f.get("file") or {}).get("meta", {}).get("content_type") == "application/pdf"
-    ]
+    pdf_valid = [f for f in files if (f.get("file") or {}).get("meta", {}).get("content_type") == "application/pdf"]
 
     new_files = []
     for f in pdf_valid:
         file_id = f.get("id") or (f.get("file") or {}).get("id")
         if file_id and (processed_file_ids is None or file_id not in processed_file_ids):
-            new_files.append({
-                "url": f["url"],
-                "name": f.get("name", "unknown.pdf"),
-                "id": file_id,
-            })
+            new_files.append(
+                {
+                    "url": f["url"],
+                    "name": f.get("name", "unknown.pdf"),
+                    "id": file_id,
+                }
+            )
             if processed_file_ids is not None:
                 processed_file_ids.add(file_id)
             logger.info(f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})")
@@ -87,24 +84,18 @@ def _route_processing_method(state: DocumentProcessingState) -> Literal["paddleo
     return "paddleocr" if state.get("use_paddle_ocr") else "vlm"
 
 
-async def _process_paddleocr_node(
-    state: DocumentProcessingState, *, pipeline
-) -> dict:
+async def _process_paddleocr_node(state: DocumentProcessingState, *, pipeline) -> dict:
     """Обрабатывает новые файлы через PaddleOCR (с fallback на VLM при ошибке)."""
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
     file_cache_session = state.get("file_cache_session") or {}
     if not new_files or not current_message_id:
         return {}
-    await pipeline._process_files_with_paddleocr(
-        new_files, current_message_id, file_cache_session
-    )
+    await pipeline._process_files_with_paddleocr(new_files, current_message_id, file_cache_session)
     return {}
 
 
-async def _process_vlm_node(
-    state: DocumentProcessingState, *, pipeline
-) -> dict:
+async def _process_vlm_node(state: DocumentProcessingState, *, pipeline) -> dict:
     """Обрабатывает новые файлы как base64-изображения для VLM."""
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
@@ -126,9 +117,7 @@ async def _process_vlm_node(
             "filename": filename,
             "images": image_blocks,
         }
-        logger.info(
-            f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
-        )
+        logger.info(f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images")
     return {}
 
 
@@ -141,9 +130,7 @@ def _cache_results_node(state: DocumentProcessingState) -> dict:
     if current_message_id and current_message_id not in message_order:
         message_order.append(current_message_id)
 
-    order_from_messages = [
-        m["id"] for m in messages if m.get("role") == "user" and m.get("id")
-    ]
+    order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
     if order_from_messages:
         message_order.clear()
         message_order.extend(order_from_messages)
@@ -158,20 +145,15 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
     file_cache_session = state.get("file_cache_session") or {}
     message_order = state.get("message_order") or []
 
-    # Повторяем логику cache_results на случай перехода no_new_files → update_messages
     current_message_id = state.get("current_message_id")
     if current_message_id and current_message_id not in message_order:
         message_order.append(current_message_id)
-    order_from_messages = [
-        m["id"] for m in messages if m.get("role") == "user" and m.get("id")
-    ]
+    order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
     if order_from_messages:
         message_order.clear()
         message_order.extend(order_from_messages)
 
-    updated = pipeline._update_messages_with_files(
-        messages, file_cache_session, message_order
-    )
+    updated = pipeline._update_messages_with_files(messages, file_cache_session, message_order)
     body["messages"] = updated
     return {"body": body}
 
