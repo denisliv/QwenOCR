@@ -212,7 +212,9 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
                 )
                 if has_files:
                     logger.info(f"Message {msg.get('id')} has files attached")
-    return {"body": body}
+    # Возвращаем message_order, чтобы inlet мог синхронизировать его с кэшем пайплайна
+    # (LangGraph может передавать копию state, поэтому мутации списка в графе не видны в кэше)
+    return {"body": body, "message_order": list(message_order)}
 
 
 def create_processing_graph(pipeline):

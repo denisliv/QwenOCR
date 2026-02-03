@@ -246,6 +246,13 @@ class Pipeline:
             "use_paddle_ocr": False,
         }
         final_state = await self._inlet_graph.ainvoke(initial_state)
+        # Синхронизируем message_order из графа в кэш пайплайна (как в old_variant —
+        # порядок должен сохраняться между запросами; LangGraph может возвращать копию state)
+        final_order = final_state.get("message_order")
+        if final_order is not None:
+            message_order.clear()
+            message_order.extend(final_order)
+            logger.info(f"Inlet: synced message_order to cache: {message_order}")
         return final_state.get("body", body)
 
     async def _process_files_with_paddleocr(
