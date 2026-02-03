@@ -138,14 +138,33 @@ def _cache_results_node(state: DocumentProcessingState) -> dict:
     current_message_id = state.get("current_message_id")
     message_order = state.get("message_order") or []
     messages = state.get("messages") or []
+    file_cache_session = state.get("file_cache_session") or {}
 
+    # Собираем все message_id из кэша файлов
+    message_ids_from_cache = {file_data.get("message_id") for file_data in file_cache_session.values() if file_data.get("message_id")}
+    
+    # Добавляем текущий message_id, если его еще нет
     if current_message_id and current_message_id not in message_order:
         message_order.append(current_message_id)
 
+    # Собираем message_id из текущих сообщений
     order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
+    
+    # Обновляем message_order: используем ID из сообщений как основу, дополняем message_id из кэша
     if order_from_messages:
+        # Если есть ID в сообщениях, используем их как основу
+        new_order = order_from_messages.copy()
+        # Добавляем message_id из кэша, которых нет в списке
+        for msg_id in message_ids_from_cache:
+            if msg_id not in new_order:
+                new_order.append(msg_id)
         message_order.clear()
-        message_order.extend(order_from_messages)
+        message_order.extend(new_order)
+    else:
+        # Если ID в сообщениях нет, добавляем message_id из кэша
+        for msg_id in message_ids_from_cache:
+            if msg_id not in message_order:
+                message_order.append(msg_id)
 
     return {}
 
@@ -166,12 +185,31 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
         logger.info(f"  File {file_id}: message_id={file_data.get('message_id')}, has_ocr={bool(file_data.get('ocr_markdown'))}, has_images={bool(file_data.get('images'))}")
 
     current_message_id = state.get("current_message_id")
-    if current_message_id and current_message_id not in message_order:
-        message_order.append(current_message_id)
+    
+    # Собираем все message_id из кэша файлов, чтобы сохранить их в message_order
+    message_ids_from_cache = {file_data.get("message_id") for file_data in file_cache_session.values() if file_data.get("message_id")}
+    
+    # Собираем message_id из текущих сообщений
     order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
+    
+    # Объединяем: сначала message_id из сообщений (если есть), затем из кэша (если их нет в списке)
+    # Это гарантирует правильный порядок и сохранение всех message_id, к которым привязаны файлы
     if order_from_messages:
-        message_order.clear()
-        message_order.extend(order_from_messages)
+        # Если есть ID в сообщениях, используем их как основу
+        message_order = order_from_messages.copy()
+        # Добавляем message_id из кэша, которых нет в списке
+        for msg_id in message_ids_from_cache:
+            if msg_id not in message_order:
+                message_order.append(msg_id)
+    else:
+        # Если ID в сообщениях нет, используем message_order из кэша
+        # Добавляем текущий message_id, если его еще нет
+        if current_message_id and current_message_id not in message_order:
+            message_order.append(current_message_id)
+        # Добавляем message_id из кэша, которых нет в списке
+        for msg_id in message_ids_from_cache:
+            if msg_id not in message_order:
+                message_order.append(msg_id)
 
     logger.info(f"Message order: {message_order}")
     logger.info(f"Messages count: {len(messages)}, user messages: {[m.get('id') for m in messages if m.get('role') == 'user']}")

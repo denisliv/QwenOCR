@@ -471,20 +471,26 @@ class Pipeline:
             msg_id = msg.get("id")
             if msg_id is not None:
                 files_for_this_message = files_by_message.get(msg_id, [])
-                logger.debug(
-                    f"Message {msg_id}: found {len(files_for_this_message)} files by msg_id"
+                logger.info(
+                    f"Message {msg_id} (index {user_message_index}): found {len(files_for_this_message)} files by msg_id"
                 )
+                if files_for_this_message:
+                    logger.info(f"  Files: {[f.get('filename') for f in files_for_this_message]}")
             elif user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
-                logger.debug(
+                logger.info(
                     f"Message (no id, index {user_message_index}): using target_message_id {target_message_id}, found {len(files_for_this_message)} files"
                 )
+                if files_for_this_message:
+                    logger.info(f"  Files: {[f.get('filename') for f in files_for_this_message]}")
             else:
                 files_for_this_message = []
-                logger.debug(
-                    f"Message (no id, index {user_message_index}): no files found"
+                logger.warning(
+                    f"Message (no id, index {user_message_index}): index {user_message_index} >= message_order length {len(message_order)}, no files found"
                 )
+                logger.info(f"  Available message_ids in cache: {list(files_by_message.keys())}")
+                logger.info(f"  Current message_order: {message_order}")
 
             ocr_parts = [
                 (f["filename"], f["ocr_markdown"])
