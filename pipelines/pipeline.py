@@ -61,7 +61,7 @@ class Pipeline:
         self.description = "Пайплайн VisualOCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
         self.vlm = None
-        # Кэш изображений и метаданных: {user_id: {chat_id: {file_id: {message_id: str, filename: str, images: list[dict]}}}}
+        # Кэш изображений/OCR и метаданных: {user_id: {chat_id: {file_id: {message_id: str, filename: str, images?: list[dict], ocr_markdown?: str}}}}}
         self._file_cache = {}
         # Кэш обработанных file_id для быстрой проверки: {user_id: {chat_id: set([file_id1, file_id2, ...])}}
         self._processed_files_cache = {}
