@@ -1,12 +1,31 @@
+# VLM configs
 vlm_api_url: "http://qwen3vl-8b-instruct-fp8:8000/v1"
 vlm_api_key: "token-abc"
 vlm_model_name: "qwen3vl-8b-instruct-fp8"
-
 temperature: 0.2
 presence_penalty: 0.0
 repetition_penalty: 1.0
 
+# Image preprocessing configs
 dpi: 150
 
+# PaddleOCRVL configs
+using_paddleocr: True
+vl_rec_backend: "vllm-server"
+vl_rec_server_url: "http://host.docker.internal:8118/v1"
+vl_rec_model_name: "PaddleOCR-VL-0.9B"
+layout_detection_model_name: "PP-DocLayoutV2"
+layout_detection_model_dir: "pipelines/PP-DocLayoutV2"
+doc_orientation_classify_model_name: "PP-LCNet_x1_0_doc_ori"
+doc_orientation_classify_model_dir: "pipelines/PP-LCNet_x1_0_doc_ori"
+use_doc_orientation_classify: True
+use_doc_unwarping: False
+use_layout_detection: True
+layout_threshold: 0.5
+layout_nms: True
+layout_unclip_ratio: [1.1, 1.0]
+layout_merge_bboxes_mode: "union"
+
+# OpenWebUI configs
 openwebui_host: "http://open-webui:8080"
 openwebui_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImU1ODI1ZGYzLWJlMDYtNDZiMS05ZmM0LTdjMzM0Y2EyNGZjYyIsImV4cCI6MTc3MDI4NjExMSwianRpIjoiYWY5ZmU5MjUtNjljNC00ZmM0LThhMzEtYTVkOWUyNzliYjc0In0.ThAFVp7XstVRipJkAM5JW15uBB5wPQkwmGl7cZANsCw"

@@ -1,0 +1,3 @@
+from ocr_utils.prompts.system_prompts import SYSTEM_PROMPT
+
+__all__ = ["SYSTEM_PROMPT"]

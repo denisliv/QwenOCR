@@ -19,43 +19,34 @@ from typing import Generator, List, Optional, Union
 
 from langchain_openai import ChatOpenAI
 from ocr_utils.config import AppConfig
-from ocr_utils.file_utils import process_files
+from ocr_utils.file_utils import process_pdf_to_base64_images
 from ocr_utils.prompts import SYSTEM_PROMPT
-from ocr_utils.schemas import parser
 from pydantic import BaseModel
+
+from pipelines.ocr_utils.schemas import parser
 
 
 class Pipeline:
     """
-    Pipeline для OpenWebUI, обеспечивающий работу с VLM моделью для анализа изображений и выполнения OCR.
+    Pipeline для OpenWebUI, обеспечивающий работу с VLM и PaddleOCRVL для анализа изображений и выполнения OCR.
+    PDF → PaddleOCRVL → Markdown → LLM → Response.
+    Image/Text → LLM → Response.
     """
 
     class Valves(BaseModel):
-        """
-        Конфигурационные параметры пайплайна.
-
-        Attributes:
-            VLM_API_URL: URL API для VLM модели
-            VLM_API_KEY: API ключ для VLM модели
-            VLM_MODEL_NAME: Название VLM модели
-            DPI: Желаемое разрешение изображений
-            OPENWEBUI_API_KEY: API ключ для OpenWebUI
-            OPENWEBUI_HOST: Хост OpenWebUI
-        """
-
         VLM_API_URL: str
         VLM_API_KEY: str
         VLM_MODEL_NAME: str
-        DPI: int
+        USING_PADDLEOCR: bool
+        VL_REC_BACKEND: str
+        VL_REC_SERVER_URL: str
+        VL_REC_MODEL_NAME: str
         OPENWEBUI_HOST: str
         OPENWEBUI_API_KEY: str
 
     def __init__(self):
-        """
-        Инициализирует Pipeline, загружает конфигурацию и настраивает параметры.
-        """
-        self.name = "OCR-Ассистент"
-        self.description = "Пайплайн OCR для OpenWebUI"
+        self.name = "VisualOCR-Ассистент"
+        self.description = "Пайплайн VisualOCR для OpenWebUI"
         self.config = AppConfig.from_yaml()
         self.vlm = None
         # Кэш изображений и метаданных: {user_id: {chat_id: {file_id: {message_id: str, filename: str, images: list[dict]}}}}
@@ -71,7 +62,10 @@ class Pipeline:
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
                 "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
-                "DPI": os.getenv("DPI", self.config.dpi),
+                "USING_PADDLEOCR": os.getenv("USING_PADDLEOCR", self.config.using_paddleocr),
+                "VL_REC_BACKEND": os.getenv("VL_REC_BACKEND", self.config.vl_rec_backend),
+                "VL_REC_SERVER_URL": os.getenv("VL_REC_SERVER_URL", self.config.vl_rec_server_url),
+                "VL_REC_MODEL_NAME": os.getenv("VL_REC_MODEL_NAME", self.config.vl_rec_model_name),
                 "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
                 "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
             }
@@ -82,7 +76,7 @@ class Pipeline:
         Вызывается при запуске пайплайна.
         Выполняет инициализацию VLM и подготовку к работе.
         """
-        logger.info("OCR Assistant starting up...")
+        logger.info(f"{self.name} starting up...")
         self.vlm = ChatOpenAI(
             base_url=self.valves.VLM_API_URL,
             api_key=self.valves.VLM_API_KEY,
@@ -91,14 +85,10 @@ class Pipeline:
             presence_penalty=self.config.presence_penalty,
             extra_body={"repetition_penalty": self.config.repetition_penalty},
         )
-        logger.info("VLM started")
+        logger.info(f"LLM {self.valves.VLM_MODEL_NAME} started")
 
     async def on_shutdown(self):
-        """
-        Вызывается при остановке пайплайна.
-        Выполняет очистку ресурсов и завершение работы.
-        """
-        logger.info("OCR Assistant shutting down...")
+        logger.info(f"{self.name} shutting down...")
 
     def _invoke_vlm(self, messages: Optional[List[dict]], stream: bool = False) -> Union[str, Generator[str, None, None]]:
         """
@@ -215,7 +205,7 @@ class Pipeline:
 
             if new_files and current_message_id:
                 logger.info(f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}")
-                files_images = await process_files(
+                files_images = await process_pdf_to_base64_images(
                     new_files,
                     self.valves.OPENWEBUI_HOST,
                     self.valves.OPENWEBUI_API_KEY,

@@ -1,5 +1,7 @@
 import base64
 import logging
+import tempfile
+from pathlib import Path
 
 import aiohttp
 import fitz
@@ -75,7 +77,7 @@ def pdf_to_base64_images(
     return image_blocks
 
 
-async def process_files(
+async def process_pdf_to_base64_images(
     file_urls: list[dict],
     openwebui_host: str,
     openwebui_token: str,
@@ -96,7 +98,6 @@ async def process_files(
     Returns:
         Словарь {file_id: [image_blocks]} с блоками изображений для каждого файла.
         Если токен не установлен, возвращает пустой словарь.
-        Ошибки при обработке отдельных файлов логируются, но не прерывают обработку.
     """
     if not openwebui_token:
         logger.warning("OPENWEBUI_API_KEY not set — skipping file download")
@@ -122,3 +123,76 @@ async def process_files(
             logger.error(f"Exception processing file {filename}: {e}")
 
     return files_images
+
+
+async def download_pdf_to_temp_path(
+    url: str,
+    headers: dict,
+    filename_hint: str = "document.pdf",
+) -> str:
+    """
+    Загружает PDF по URL и сохраняет во временный файл.
+
+    Args:
+        url: URL файла для загрузки
+        headers: Словарь с HTTP заголовками, включая авторизацию
+        filename_hint: Подсказка имени файла для расширения
+
+    Returns:
+        Путь к временному файлу
+
+    Raises:
+        Exception: Если загрузка не удалась или не удалось записать файл
+    """
+    content = await download_file(url, headers)
+    suffix = Path(filename_hint).suffix or ".pdf"
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    try:
+        with open(fd, "wb") as f:
+            f.write(content)
+        return path
+    except Exception:
+        Path(path).unlink(missing_ok=True)
+        raise
+
+
+async def download_pdfs_to_temp_paths(
+    file_list: list[dict],
+    openwebui_host: str,
+    openwebui_token: str,
+) -> list[str]:
+    """
+    Загружает список PDF-файлов по URL OpenWebUI и сохраняет во временные файлы.
+
+    Args:
+        file_list: Список словарей с ключами url и name
+        openwebui_host: Базовый хост OpenWebUI
+        openwebui_token: Токен авторизации OpenWebUI
+
+    Returns:
+        Список путей к временным файлам
+
+    Raises:
+        Exception: Если загрузка хотя бы одного файла не удалась
+    """
+    if not openwebui_token:
+        logger.warning("OPENWEBUI_API_KEY not set — skipping file download")
+        return []
+
+    headers = {"Authorization": f"Bearer {openwebui_token}"}
+    paths = []
+
+    for file_meta in file_list:
+        url = f"{openwebui_host.rstrip('/')}{file_meta['url']}/content"
+        name = file_meta.get("name", "unknown.pdf")
+        try:
+            path = await download_pdf_to_temp_path(url, headers, name)
+            paths.append(path)
+            logger.info(f"Downloaded {name} to temp file")
+        except Exception as e:
+            logger.error(f"Failed to download {name}: {e}")
+            for p in paths:
+                Path(p).unlink(missing_ok=True)
+            raise
+
+    return paths
