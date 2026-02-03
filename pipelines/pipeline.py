@@ -1,13 +1,17 @@
+import gc
 import logging
 import os
 import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
+    formatter = logging.Formatter(
+        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
+    )
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -19,8 +23,13 @@ from typing import Generator, List, Optional, Union
 
 from langchain_openai import ChatOpenAI
 from ocr_utils.config import AppConfig
-from ocr_utils.file_utils import process_pdf_to_base64_images
+from ocr_utils.file_utils import (
+    download_pdfs_to_temp_paths,
+    process_pdf_to_base64_images,
+)
+from ocr_utils.markdown_utils import html_to_markdown_with_tables
 from ocr_utils.prompts import SYSTEM_PROMPT
+from paddleocr import PaddleOCRVL
 from pydantic import BaseModel
 
 from pipelines.ocr_utils.schemas import parser
@@ -28,9 +37,12 @@ from pipelines.ocr_utils.schemas import parser
 
 class Pipeline:
     """
-    Pipeline для OpenWebUI, обеспечивающий работу с VLM и PaddleOCRVL для анализа изображений и выполнения OCR.
-    PDF → PaddleOCRVL → Markdown → LLM → Response.
-    Image/Text → LLM → Response.
+    Pipeline для OpenWebUI, обеспечивающий работу с VLM и опционально PaddleOCR для PDF.
+
+    - USING_PADDLEOCR=False: PDF/Image/Text → VLM (изображения как base64).
+    - USING_PADDLEOCR=True, только текст или изображение: Image/Text → VLM (изображения как base64).
+    - USING_PADDLEOCR=True, PDF: OCR через PaddleOCR → Markdown → VLM.
+      При ошибке PaddleOCR — fallback на VLM с base64-изображениями.
     """
 
     class Valves(BaseModel):
@@ -61,13 +73,27 @@ class Pipeline:
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
-                "USING_PADDLEOCR": os.getenv("USING_PADDLEOCR", self.config.using_paddleocr),
-                "VL_REC_BACKEND": os.getenv("VL_REC_BACKEND", self.config.vl_rec_backend),
-                "VL_REC_SERVER_URL": os.getenv("VL_REC_SERVER_URL", self.config.vl_rec_server_url),
-                "VL_REC_MODEL_NAME": os.getenv("VL_REC_MODEL_NAME", self.config.vl_rec_model_name),
-                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
-                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
+                "VLM_MODEL_NAME": os.getenv(
+                    "VLM_MODEL_NAME", self.config.vlm_model_name
+                ),
+                "USING_PADDLEOCR": os.getenv(
+                    "USING_PADDLEOCR", self.config.using_paddleocr
+                ),
+                "VL_REC_BACKEND": os.getenv(
+                    "VL_REC_BACKEND", self.config.vl_rec_backend
+                ),
+                "VL_REC_SERVER_URL": os.getenv(
+                    "VL_REC_SERVER_URL", self.config.vl_rec_server_url
+                ),
+                "VL_REC_MODEL_NAME": os.getenv(
+                    "VL_REC_MODEL_NAME", self.config.vl_rec_model_name
+                ),
+                "OPENWEBUI_HOST": os.getenv(
+                    "OPENWEBUI_HOST", self.config.openwebui_host
+                ),
+                "OPENWEBUI_API_KEY": os.getenv(
+                    "OPENWEBUI_API_KEY", self.config.openwebui_token
+                ),
             }
         )
 
@@ -90,7 +116,9 @@ class Pipeline:
     async def on_shutdown(self):
         logger.info(f"{self.name} shutting down...")
 
-    def _invoke_vlm(self, messages: Optional[List[dict]], stream: bool = False) -> Union[str, Generator[str, None, None]]:
+    def _invoke_vlm(
+        self, messages: Optional[List[dict]], stream: bool = False
+    ) -> Union[str, Generator[str, None, None]]:
         """
         Выполняет вызов VLM модели для обработки сообщений.
         В обычном режиме возвращает строку, в stream-режиме — генератор токенов.
@@ -113,7 +141,10 @@ class Pipeline:
             except Exception as e:
                 logger.exception("Error during VLM invocation")
                 error_text = str(e)
-                if "decoder prompt" in error_text and "maximum model length" in error_text:
+                if (
+                    "decoder prompt" in error_text
+                    and "maximum model length" in error_text
+                ):
                     return (
                         "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
                         "Пожалуйста, начните новый чат или сократите текст текущего запроса."
@@ -130,7 +161,10 @@ class Pipeline:
             except Exception as e:
                 logger.exception("Error during VLM streaming invocation")
                 error_text = str(e)
-                if "decoder prompt" in error_text and "maximum model length" in error_text:
+                if (
+                    "decoder prompt" in error_text
+                    and "maximum model length" in error_text
+                ):
                     yield (
                         "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
                         "Пожалуйста, начните новый чат или сократите текст текущего запроса."
@@ -187,7 +221,12 @@ class Pipeline:
         message_order = self._message_order_cache[user_id][chat_id]
 
         if files:
-            pdf_valid_files = [f for f in files if f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"]
+            pdf_valid_files = [
+                f
+                for f in files
+                if f.get("file", {}).get("meta", {}).get("content_type")
+                == "application/pdf"
+            ]
 
             new_files = []
             for f in pdf_valid_files:
@@ -201,41 +240,122 @@ class Pipeline:
                         }
                     )
                     processed_file_ids.add(file_id)
-                    logger.info(f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})")
+                    logger.info(
+                        f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})"
+                    )
 
             if new_files and current_message_id:
-                logger.info(f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}")
-                files_images = await process_pdf_to_base64_images(
-                    new_files,
-                    self.valves.OPENWEBUI_HOST,
-                    self.valves.OPENWEBUI_API_KEY,
-                    self.valves.DPI,
+                logger.info(
+                    f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}"
                 )
 
                 if current_message_id not in message_order:
                     message_order.append(current_message_id)
                     logger.info(f"Added message_id {current_message_id} to order cache")
 
-                for file_meta in new_files:
-                    file_id = file_meta["id"]
-                    filename = file_meta["name"]
-                    image_blocks = files_images.get(file_id, [])
-                    file_cache_entry = {
-                        "message_id": current_message_id,
-                        "filename": filename,
-                        "images": image_blocks,
-                    }
-                    file_cache_session[file_id] = file_cache_entry
-                    logger.info(
-                        f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
+                use_paddle_ocr = getattr(self.valves, "USING_PADDLEOCR", False)
+                if use_paddle_ocr:
+                    temp_paths = []
+                    try:
+                        temp_paths = await download_pdfs_to_temp_paths(
+                            new_files,
+                            self.valves.OPENWEBUI_HOST,
+                            self.valves.OPENWEBUI_API_KEY,
+                        )
+                        if not temp_paths:
+                            raise ValueError("No temp paths after download")
+                        ocr = PaddleOCRVL(
+                            vl_rec_backend=self.valves.VL_REC_BACKEND,
+                            vl_rec_server_url=self.valves.VL_REC_SERVER_URL,
+                            vl_rec_model_name=self.valves.VL_REC_MODEL_NAME,
+                            layout_detection_model_name=self.config.layout_detection_model_name,
+                            layout_detection_model_dir=self.config.layout_detection_model_dir,
+                            doc_orientation_classify_model_name=self.config.doc_orientation_classify_model_name,
+                            doc_orientation_classify_model_dir=self.config.doc_orientation_classify_model_dir,
+                            use_doc_orientation_classify=self.config.use_doc_orientation_classify,
+                            use_doc_unwarping=self.config.use_doc_unwarping,
+                            use_layout_detection=self.config.use_layout_detection,
+                            layout_threshold=self.config.layout_threshold,
+                            layout_nms=self.config.layout_nms,
+                            layout_unclip_ratio=self.config.layout_unclip_ratio,
+                            layout_merge_bboxes_mode=self.config.layout_merge_bboxes_mode,
+                        )
+                        logger.info("PaddleOCRVL started for PDF OCR")
+                        for file_meta, input_path in zip(new_files, temp_paths):
+                            file_id = file_meta["id"]
+                            filename = file_meta["name"]
+                            output = ocr.predict(input=input_path)
+                            all_md = []
+                            for res in output:
+                                all_md.append(res.markdown)
+                            final_html = ocr.concatenate_markdown_pages(all_md)
+                            ocr_markdown = html_to_markdown_with_tables(final_html)
+                            file_cache_session[file_id] = {
+                                "message_id": current_message_id,
+                                "filename": filename,
+                                "ocr_markdown": ocr_markdown,
+                            }
+                            logger.info(
+                                f"Cached OCR result for {filename} (id: {file_id}) for message_id: {current_message_id}"
+                            )
+                        del ocr
+                        gc.collect()
+                    except Exception as e:
+                        logger.warning(
+                            "PaddleOCR failed, falling back to VLM with base64 images: %s",
+                            e,
+                        )
+                        files_images = await process_pdf_to_base64_images(
+                            new_files,
+                            self.valves.OPENWEBUI_HOST,
+                            self.valves.OPENWEBUI_API_KEY,
+                            self.config.dpi,
+                        )
+                        for file_meta in new_files:
+                            file_id = file_meta["id"]
+                            filename = file_meta["name"]
+                            image_blocks = files_images.get(file_id, [])
+                            file_cache_session[file_id] = {
+                                "message_id": current_message_id,
+                                "filename": filename,
+                                "images": image_blocks,
+                            }
+                            logger.info(
+                                f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
+                            )
+                    finally:
+                        for p in temp_paths:
+                            Path(p).unlink(missing_ok=True)
+                else:
+                    files_images = await process_pdf_to_base64_images(
+                        new_files,
+                        self.valves.OPENWEBUI_HOST,
+                        self.valves.OPENWEBUI_API_KEY,
+                        self.config.dpi,
                     )
+                    for file_meta in new_files:
+                        file_id = file_meta["id"]
+                        filename = file_meta["name"]
+                        image_blocks = files_images.get(file_id, [])
+                        file_cache_session[file_id] = {
+                            "message_id": current_message_id,
+                            "filename": filename,
+                            "images": image_blocks,
+                        }
+                        logger.info(
+                            f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
+                        )
 
-        updated_messages = self._update_messages_with_files(messages, file_cache_session, message_order)
+        updated_messages = self._update_messages_with_files(
+            messages, file_cache_session, message_order
+        )
         body["messages"] = updated_messages
 
         return body
 
-    def _update_messages_with_files(self, messages: List[dict], file_cache: dict, message_order: List[str]) -> List[dict]:
+    def _update_messages_with_files(
+        self, messages: List[dict], file_cache: dict, message_order: List[str]
+    ) -> List[dict]:
         """
         Обновляет все сообщения пользователя, добавляя изображения и имена файлов
         к соответствующим сообщениям на основе кэша файлов и порядка появления message_id.
@@ -256,8 +376,9 @@ class Pipeline:
             files_by_message[msg_id].append(
                 {
                     "file_id": file_id,
-                    "filename": file_data["filename"],
-                    "images": file_data["images"],
+                    "filename": file_data.get("filename"),
+                    "images": file_data.get("images"),
+                    "ocr_markdown": file_data.get("ocr_markdown"),
                 }
             )
 
@@ -302,19 +423,43 @@ class Pipeline:
             if user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
+            else:
+                files_for_this_message = []
 
+            ocr_parts = [
+                (f["filename"], f["ocr_markdown"])
+                for f in files_for_this_message
+                if f.get("ocr_markdown")
+            ]
+            has_images_from_cache = any(f.get("images") for f in files_for_this_message)
+            has_any_images = has_images_from_cache or bool(existing_images)
+
+            if ocr_parts:
+                mode_block = "[MODE: OCR_POSTPROCESS]\n\n" + "\n\n".join(
+                    "Имя файла: " + fn + "\n\n" + md for fn, md in ocr_parts
+                )
+                new_content.append({"type": "text", "text": mode_block})
+                for fn, _ in ocr_parts:
+                    existing_file_names.add(fn)
+            elif has_any_images:
+                new_content.append(
+                    {"type": "text", "text": "[MODE: VISION_ANALYSIS]\n\n"}
+                )
                 for file_info in files_for_this_message:
+                    images = file_info.get("images")
+                    if not images:
+                        continue
                     filename = file_info["filename"]
-                    images = file_info["images"]
-
                     if filename not in existing_file_names:
-                        file_name_text = f"Имя файла: {filename}"
-                        new_content.append({"type": "text", "text": file_name_text})
+                        new_content.append(
+                            {"type": "text", "text": f"Имя файла: {filename}"}
+                        )
                         existing_file_names.add(filename)
-
                     new_content.extend(images)
-
-            new_content.extend(existing_images)
+                new_content.extend(existing_images)
+            else:
+                new_content.append({"type": "text", "text": "[MODE: TEXT_ONLY]\n\n"})
+                new_content.extend(existing_images)
 
             updated_msg = {
                 **msg,
@@ -352,7 +497,9 @@ class Pipeline:
         """
         return body
 
-    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator[str, None, None]]:
+    def pipe(
+        self, user_message: str, model_id: str, messages: List[dict], body: dict
+    ) -> Union[str, Generator[str, None, None]]:
         """
         Основной метод обработки запроса через пайплайн.
         Выполняет вызов VLM модели с подготовленными сообщениями.
@@ -377,8 +524,14 @@ class Pipeline:
                     msg["content"] = self._strip_task_context_from_message(content)
                 elif isinstance(content, list):
                     for item in content:
-                        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
-                            item["text"] = self._strip_task_context_from_message(item["text"])
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "text"
+                            and isinstance(item.get("text"), str)
+                        ):
+                            item["text"] = self._strip_task_context_from_message(
+                                item["text"]
+                            )
                 break
 
             has_system_message = any(msg.get("role") == "system" for msg in messages)
