@@ -9,9 +9,7 @@ logger.setLevel(logging.INFO)
 
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "[%(asctime)s] %(levelname)s in %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s in %(name)s: %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -73,35 +71,17 @@ class Pipeline:
                 "pipelines": ["*"],
                 "VLM_API_URL": os.getenv("VLM_API_URL", self.config.vlm_api_url),
                 "VLM_API_KEY": os.getenv("VLM_API_KEY", self.config.vlm_api_key),
-                "VLM_MODEL_NAME": os.getenv(
-                    "VLM_MODEL_NAME", self.config.vlm_model_name
-                ),
-                "USING_PADDLEOCR": os.getenv(
-                    "USING_PADDLEOCR", self.config.using_paddleocr
-                ),
-                "VL_REC_BACKEND": os.getenv(
-                    "VL_REC_BACKEND", self.config.vl_rec_backend
-                ),
-                "VL_REC_SERVER_URL": os.getenv(
-                    "VL_REC_SERVER_URL", self.config.vl_rec_server_url
-                ),
-                "VL_REC_MODEL_NAME": os.getenv(
-                    "VL_REC_MODEL_NAME", self.config.vl_rec_model_name
-                ),
-                "OPENWEBUI_HOST": os.getenv(
-                    "OPENWEBUI_HOST", self.config.openwebui_host
-                ),
-                "OPENWEBUI_API_KEY": os.getenv(
-                    "OPENWEBUI_API_KEY", self.config.openwebui_token
-                ),
+                "VLM_MODEL_NAME": os.getenv("VLM_MODEL_NAME", self.config.vlm_model_name),
+                "USING_PADDLEOCR": os.getenv("USING_PADDLEOCR", self.config.using_paddleocr),
+                "VL_REC_BACKEND": os.getenv("VL_REC_BACKEND", self.config.vl_rec_backend),
+                "VL_REC_SERVER_URL": os.getenv("VL_REC_SERVER_URL", self.config.vl_rec_server_url),
+                "VL_REC_MODEL_NAME": os.getenv("VL_REC_MODEL_NAME", self.config.vl_rec_model_name),
+                "OPENWEBUI_HOST": os.getenv("OPENWEBUI_HOST", self.config.openwebui_host),
+                "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY", self.config.openwebui_token),
             }
         )
 
     async def on_startup(self):
-        """
-        Вызывается при запуске пайплайна.
-        Выполняет инициализацию VLM и подготовку к работе.
-        """
         logger.info(f"{self.name} starting up...")
         self.vlm = ChatOpenAI(
             base_url=self.valves.VLM_API_URL,
@@ -116,9 +96,7 @@ class Pipeline:
     async def on_shutdown(self):
         logger.info(f"{self.name} shutting down...")
 
-    def _invoke_vlm(
-        self, messages: Optional[List[dict]], stream: bool = False
-    ) -> Union[str, Generator[str, None, None]]:
+    def _invoke_vlm(self, messages: Optional[List[dict]], stream: bool = False) -> Union[str, Generator[str, None, None]]:
         """
         Выполняет вызов VLM модели для обработки сообщений.
         В обычном режиме возвращает строку, в stream-режиме — генератор токенов.
@@ -141,10 +119,7 @@ class Pipeline:
             except Exception as e:
                 logger.exception("Error during VLM invocation")
                 error_text = str(e)
-                if (
-                    "decoder prompt" in error_text
-                    and "maximum model length" in error_text
-                ):
+                if "decoder prompt" in error_text and "maximum model length" in error_text:
                     return (
                         "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
                         "Пожалуйста, начните новый чат или сократите текст текущего запроса."
@@ -161,10 +136,7 @@ class Pipeline:
             except Exception as e:
                 logger.exception("Error during VLM streaming invocation")
                 error_text = str(e)
-                if (
-                    "decoder prompt" in error_text
-                    and "maximum model length" in error_text
-                ):
+                if "decoder prompt" in error_text and "maximum model length" in error_text:
                     yield (
                         "Ошибка: Превышен максимально допустимый размер контекста для используемой модели. "
                         "Пожалуйста, начните новый чат или сократите текст текущего запроса."
@@ -221,12 +193,7 @@ class Pipeline:
         message_order = self._message_order_cache[user_id][chat_id]
 
         if files:
-            pdf_valid_files = [
-                f
-                for f in files
-                if f.get("file", {}).get("meta", {}).get("content_type")
-                == "application/pdf"
-            ]
+            pdf_valid_files = [f for f in files if f.get("file", {}).get("meta", {}).get("content_type") == "application/pdf"]
 
             new_files = []
             for f in pdf_valid_files:
@@ -240,14 +207,10 @@ class Pipeline:
                         }
                     )
                     processed_file_ids.add(file_id)
-                    logger.info(
-                        f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})"
-                    )
+                    logger.info(f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})")
 
             if new_files and current_message_id:
-                logger.info(
-                    f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}"
-                )
+                logger.info(f"Processing {len(new_files)} new file(s) for message_id: {current_message_id}")
 
                 if current_message_id not in message_order:
                     message_order.append(current_message_id)
@@ -295,9 +258,7 @@ class Pipeline:
                                 "filename": filename,
                                 "ocr_markdown": ocr_markdown,
                             }
-                            logger.info(
-                                f"Cached OCR result for {filename} (id: {file_id}) for message_id: {current_message_id}"
-                            )
+                            logger.info(f"Cached OCR result for {filename} (id: {file_id}) for message_id: {current_message_id}")
                         del ocr
                         gc.collect()
                     except Exception as e:
@@ -346,37 +307,26 @@ class Pipeline:
                             f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
                         )
 
-        # Порядок сообщений: при каждом запросе добавляем current_message_id в кэш
-        # (если ещё нет), чтобы при отсутствии id в messages порядок всё равно сохранялся.
         if current_message_id and current_message_id not in message_order:
             message_order.append(current_message_id)
 
-        # Предпочтительно строим message_order из текущего списка messages по id
-        # пользовательских сообщений (текст, изображение, файл, файл+текст, изображение+текст).
-        order_from_messages = [
-            m["id"] for m in messages
-            if m.get("role") == "user" and m.get("id")
-        ]
+        order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
         if order_from_messages:
             message_order = order_from_messages
 
-        updated_messages = self._update_messages_with_files(
-            messages, file_cache_session, message_order
-        )
+        updated_messages = self._update_messages_with_files(messages, file_cache_session, message_order)
         body["messages"] = updated_messages
 
         return body
 
-    def _update_messages_with_files(
-        self, messages: List[dict], file_cache: dict, message_order: List[str]
-    ) -> List[dict]:
+    def _update_messages_with_files(self, messages: List[dict], file_cache: dict, message_order: List[str]) -> List[dict]:
         """
-        Обновляет все сообщения пользователя, добавляя изображения и имена файлов
+        Обновляет все сообщения пользователя, добавляя изображения/результат ocr и имена файлов
         к соответствующим сообщениям на основе кэша файлов и порядка появления message_id.
 
         Args:
             messages: Список сообщений
-            file_cache: Кэш файлов для текущей сессии {file_id: {message_id, filename, images}}
+            file_cache: Кэш файлов для текущей сессии {file_id: {message_id, filename, images/ocr_markdown}}
             message_order: Список message_id в порядке их появления
 
         Returns:
@@ -434,7 +384,6 @@ class Pipeline:
             if user_text:
                 new_content.append({"type": "text", "text": user_text})
 
-            # Сопоставление файлов: по msg["id"] если есть, иначе по порядку (message_order)
             msg_id = msg.get("id")
             if msg_id is not None:
                 files_for_this_message = files_by_message.get(msg_id, [])
@@ -444,47 +393,35 @@ class Pipeline:
             else:
                 files_for_this_message = []
 
-            ocr_parts = [
-                (f["filename"], f["ocr_markdown"])
-                for f in files_for_this_message
-                if f.get("ocr_markdown")
-            ]
+            ocr_parts = [(f["filename"], f["ocr_markdown"]) for f in files_for_this_message if f.get("ocr_markdown")]
             has_images_from_cache = any(f.get("images") for f in files_for_this_message)
             has_any_images = has_images_from_cache or bool(existing_images)
 
             if ocr_parts:
-                mode_block = "[MODE: OCR_POSTPROCESS]\n\n" + "\n\n".join(
-                    "Имя файла: " + fn + "\n\n" + md for fn, md in ocr_parts
-                )
+                mode_block = "[MODE: OCR_POSTPROCESS]\n\n" + "\n\n".join("Имя файла: " + fn + "\n\n" + md for fn, md in ocr_parts)
                 new_content.append({"type": "text", "text": mode_block})
                 for fn, _ in ocr_parts:
                     existing_file_names.add(fn)
-                # В одном сообщении могут быть и OCR-файлы, и файлы как картинки/вложения
+
                 for file_info in files_for_this_message:
                     images = file_info.get("images")
                     if not images:
                         continue
                     filename = file_info["filename"]
                     if filename not in existing_file_names:
-                        new_content.append(
-                            {"type": "text", "text": f"Имя файла: {filename}"}
-                        )
+                        new_content.append({"type": "text", "text": f"Имя файла: {filename}"})
                         existing_file_names.add(filename)
                     new_content.extend(images)
                 new_content.extend(existing_images)
             elif has_any_images:
-                new_content.append(
-                    {"type": "text", "text": "[MODE: VISION_ANALYSIS]\n\n"}
-                )
+                new_content.append({"type": "text", "text": "[MODE: VISION_ANALYSIS]\n\n"})
                 for file_info in files_for_this_message:
                     images = file_info.get("images")
                     if not images:
                         continue
                     filename = file_info["filename"]
                     if filename not in existing_file_names:
-                        new_content.append(
-                            {"type": "text", "text": f"Имя файла: {filename}"}
-                        )
+                        new_content.append({"type": "text", "text": f"Имя файла: {filename}"})
                         existing_file_names.add(filename)
                     new_content.extend(images)
                 new_content.extend(existing_images)
@@ -528,9 +465,7 @@ class Pipeline:
         """
         return body
 
-    def pipe(
-        self, user_message: str, model_id: str, messages: List[dict], body: dict
-    ) -> Union[str, Generator[str, None, None]]:
+    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator[str, None, None]]:
         """
         Основной метод обработки запроса через пайплайн.
         Выполняет вызов VLM модели с подготовленными сообщениями.
@@ -555,14 +490,8 @@ class Pipeline:
                     msg["content"] = self._strip_task_context_from_message(content)
                 elif isinstance(content, list):
                     for item in content:
-                        if (
-                            isinstance(item, dict)
-                            and item.get("type") == "text"
-                            and isinstance(item.get("text"), str)
-                        ):
-                            item["text"] = self._strip_task_context_from_message(
-                                item["text"]
-                            )
+                        if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                            item["text"] = self._strip_task_context_from_message(item["text"])
                 break
 
             has_system_message = any(msg.get("role") == "system" for msg in messages)
