@@ -346,6 +346,20 @@ class Pipeline:
                             f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
                         )
 
+        # Порядок сообщений: при каждом запросе добавляем current_message_id в кэш
+        # (если ещё нет), чтобы при отсутствии id в messages порядок всё равно сохранялся.
+        if current_message_id and current_message_id not in message_order:
+            message_order.append(current_message_id)
+
+        # Предпочтительно строим message_order из текущего списка messages по id
+        # пользовательских сообщений (текст, изображение, файл, файл+текст, изображение+текст).
+        order_from_messages = [
+            m["id"] for m in messages
+            if m.get("role") == "user" and m.get("id")
+        ]
+        if order_from_messages:
+            message_order = order_from_messages
+
         updated_messages = self._update_messages_with_files(
             messages, file_cache_session, message_order
         )
@@ -420,7 +434,11 @@ class Pipeline:
             if user_text:
                 new_content.append({"type": "text", "text": user_text})
 
-            if user_message_index < len(message_order):
+            # Сопоставление файлов: по msg["id"] если есть, иначе по порядку (message_order)
+            msg_id = msg.get("id")
+            if msg_id is not None:
+                files_for_this_message = files_by_message.get(msg_id, [])
+            elif user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
             else:
@@ -441,6 +459,19 @@ class Pipeline:
                 new_content.append({"type": "text", "text": mode_block})
                 for fn, _ in ocr_parts:
                     existing_file_names.add(fn)
+                # В одном сообщении могут быть и OCR-файлы, и файлы как картинки/вложения
+                for file_info in files_for_this_message:
+                    images = file_info.get("images")
+                    if not images:
+                        continue
+                    filename = file_info["filename"]
+                    if filename not in existing_file_names:
+                        new_content.append(
+                            {"type": "text", "text": f"Имя файла: {filename}"}
+                        )
+                        existing_file_names.add(filename)
+                    new_content.extend(images)
+                new_content.extend(existing_images)
             elif has_any_images:
                 new_content.append(
                     {"type": "text", "text": "[MODE: VISION_ANALYSIS]\n\n"}
