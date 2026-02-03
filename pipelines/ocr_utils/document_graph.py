@@ -170,25 +170,26 @@ def create_processing_graph(pipeline):
     """
     workflow = StateGraph(DocumentProcessingState)
 
+    # Создаем обертки для узлов, которым нужен pipeline
+    async def process_paddleocr_wrapper(state: DocumentProcessingState) -> dict:
+        return await _process_paddleocr_node(state, pipeline=pipeline)
+
+    async def process_vlm_wrapper(state: DocumentProcessingState) -> dict:
+        return await _process_vlm_node(state, pipeline=pipeline)
+
+    def choose_method_wrapper(state: DocumentProcessingState) -> dict:
+        return _choose_method_node(state, pipeline=pipeline)
+
+    def update_messages_wrapper(state: DocumentProcessingState) -> dict:
+        return _update_messages_node(state, pipeline=pipeline)
+
     workflow.add_node("validate_input", _validate_input_node)
     workflow.add_node("detect_new_files", _detect_new_files_node)
-    workflow.add_node(
-        "choose_processing_method",
-        lambda s: _choose_method_node(s, pipeline=pipeline),
-    )
-    workflow.add_node(
-        "process_with_paddleocr",
-        lambda s: _process_paddleocr_node(s, pipeline=pipeline),
-    )
-    workflow.add_node(
-        "process_with_vlm",
-        lambda s: _process_vlm_node(s, pipeline=pipeline),
-    )
+    workflow.add_node("choose_processing_method", choose_method_wrapper)
+    workflow.add_node("process_with_paddleocr", process_paddleocr_wrapper)
+    workflow.add_node("process_with_vlm", process_vlm_wrapper)
     workflow.add_node("cache_results", _cache_results_node)
-    workflow.add_node(
-        "update_messages",
-        lambda s: _update_messages_node(s, pipeline=pipeline),
-    )
+    workflow.add_node("update_messages", update_messages_wrapper)
 
     workflow.set_entry_point("validate_input")
     workflow.add_edge("validate_input", "detect_new_files")
