@@ -88,20 +88,30 @@ async def _process_paddleocr_node(state: DocumentProcessingState, *, pipeline) -
     """Обрабатывает новые файлы через PaddleOCR (с fallback на VLM при ошибке)."""
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
-    file_cache_session = state.get("file_cache_session") or {}
+    file_cache_session = state.get("file_cache_session")
     if not new_files or not current_message_id:
         return {}
+    if file_cache_session is None:
+        logger.error("file_cache_session is None in _process_paddleocr_node")
+        return {}
+    logger.info(f"Processing {len(new_files)} files with PaddleOCR for message_id: {current_message_id}")
     await pipeline._process_files_with_paddleocr(new_files, current_message_id, file_cache_session)
-    return {}
+    logger.info(f"PaddleOCR processing completed. file_cache_session keys: {list(file_cache_session.keys())}")
+    # Явно возвращаем file_cache_session, чтобы гарантировать его передачу в следующем узле
+    return {"file_cache_session": file_cache_session}
 
 
 async def _process_vlm_node(state: DocumentProcessingState, *, pipeline) -> dict:
     """Обрабатывает новые файлы как base64-изображения для VLM."""
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
-    file_cache_session = state.get("file_cache_session") or {}
+    file_cache_session = state.get("file_cache_session")
     if not new_files or not current_message_id:
         return {}
+    if file_cache_session is None:
+        logger.error("file_cache_session is None in _process_vlm_node")
+        return {}
+    logger.info(f"Processing {len(new_files)} files with VLM for message_id: {current_message_id}")
     files_images = await process_pdf_to_base64_images(
         new_files,
         pipeline.valves.OPENWEBUI_HOST,
@@ -118,7 +128,9 @@ async def _process_vlm_node(state: DocumentProcessingState, *, pipeline) -> dict
             "images": image_blocks,
         }
         logger.info(f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images")
-    return {}
+    logger.info(f"VLM processing completed. file_cache_session keys: {list(file_cache_session.keys())}")
+    # Явно возвращаем file_cache_session, чтобы гарантировать его передачу в следующем узле
+    return {"file_cache_session": file_cache_session}
 
 
 def _cache_results_node(state: DocumentProcessingState) -> dict:
@@ -142,8 +154,16 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
     """Подставляет в сообщения изображения/OCR и имена файлов, записывает body['messages']."""
     body = state.get("body") or {}
     messages = state.get("messages") or []
-    file_cache_session = state.get("file_cache_session") or {}
+    file_cache_session = state.get("file_cache_session")
     message_order = state.get("message_order") or []
+
+    if file_cache_session is None:
+        logger.error("file_cache_session is None in _update_messages_node")
+        file_cache_session = {}
+
+    logger.info(f"Updating messages. file_cache_session has {len(file_cache_session)} entries: {list(file_cache_session.keys())}")
+    for file_id, file_data in file_cache_session.items():
+        logger.info(f"  File {file_id}: message_id={file_data.get('message_id')}, has_ocr={bool(file_data.get('ocr_markdown'))}, has_images={bool(file_data.get('images'))}")
 
     current_message_id = state.get("current_message_id")
     if current_message_id and current_message_id not in message_order:
@@ -153,8 +173,12 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
         message_order.clear()
         message_order.extend(order_from_messages)
 
+    logger.info(f"Message order: {message_order}")
+    logger.info(f"Messages count: {len(messages)}, user messages: {[m.get('id') for m in messages if m.get('role') == 'user']}")
+
     updated = pipeline._update_messages_with_files(messages, file_cache_session, message_order)
     body["messages"] = updated
+    logger.info(f"Updated messages count: {len(updated)}")
     return {"body": body}
 
 

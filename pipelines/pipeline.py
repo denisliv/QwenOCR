@@ -410,6 +410,9 @@ class Pipeline:
                     "ocr_markdown": file_data.get("ocr_markdown"),
                 }
             )
+        logger.info(f"_update_messages_with_files: file_cache has {len(file_cache)} entries")
+        logger.info(f"_update_messages_with_files: files_by_message keys: {list(files_by_message.keys())}")
+        logger.info(f"_update_messages_with_files: message_order: {message_order}")
 
         user_message_index = 0
         updated_messages = []
@@ -452,11 +455,14 @@ class Pipeline:
             msg_id = msg.get("id")
             if msg_id is not None:
                 files_for_this_message = files_by_message.get(msg_id, [])
+                logger.debug(f"Message {msg_id}: found {len(files_for_this_message)} files by msg_id")
             elif user_message_index < len(message_order):
                 target_message_id = message_order[user_message_index]
                 files_for_this_message = files_by_message.get(target_message_id, [])
+                logger.debug(f"Message (no id, index {user_message_index}): using target_message_id {target_message_id}, found {len(files_for_this_message)} files")
             else:
                 files_for_this_message = []
+                logger.debug(f"Message (no id, index {user_message_index}): no files found")
 
             ocr_parts = [
                 (f["filename"], f["ocr_markdown"])
