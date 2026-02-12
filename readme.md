@@ -44,7 +44,7 @@ QwenOCR/
        - Если есть — маршрут в `process_with_paddleocr` или `process_with_vlm` в зависимости от `use_paddle_ocr`.
     4. **process_with_paddleocr** — PaddleOCR для PDF → markdown; при ошибке — fallback на base64-изображения.
     5. **process_with_vlm** — конвертация PDF в base64 PNG-изображения через PyMuPDF.
-    6. **update_messages** — подставляет в `body["messages"]` OCR-markdown или base64-изображения с именами файлов к соответствующим пользовательским сообщениям (сопоставление файлов с сообщениями выполняется по `message_id`).
+    6. **update_messages** — подставляет в `body["messages"]` OCR-markdown или base64-изображения с именами файлов к соответствующим пользовательским сообщениям (сопоставление файлов с сообщениями выполняется по позиции user-сообщения — `user_msg_index`).
 
 - **Основная обработка (`pipe`)**
   - Из последнего пользовательского сообщения удаляется служебный префикс OpenWebUI (`### Task:` ... `</context>`).
