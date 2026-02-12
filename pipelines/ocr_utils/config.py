@@ -13,6 +13,7 @@ class AppConfig:
     repetition_penalty: float
 
     dpi: int
+
     using_paddleocr: bool
     vl_rec_backend: str
     vl_rec_server_url: str
@@ -51,12 +52,8 @@ class AppConfig:
             vl_rec_model_name=data["vl_rec_model_name"],
             layout_detection_model_name=data["layout_detection_model_name"],
             layout_detection_model_dir=data["layout_detection_model_dir"],
-            doc_orientation_classify_model_name=data[
-                "doc_orientation_classify_model_name"
-            ],
-            doc_orientation_classify_model_dir=data[
-                "doc_orientation_classify_model_dir"
-            ],
+            doc_orientation_classify_model_name=data["doc_orientation_classify_model_name"],
+            doc_orientation_classify_model_dir=data["doc_orientation_classify_model_dir"],
             use_doc_orientation_classify=data["use_doc_orientation_classify"],
             use_doc_unwarping=data["use_doc_unwarping"],
             use_layout_detection=data["use_layout_detection"],

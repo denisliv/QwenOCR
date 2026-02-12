@@ -11,5 +11,5 @@ PyMuPDF==1.26.7
 pydantic==2.12.5
 
 paddlepaddle==3.2.2
-paddleocr==3.3.2
-paddlex[ocr]==3.3.12
+paddleocr==3.4.0
+paddlex[ocr]==3.4.1

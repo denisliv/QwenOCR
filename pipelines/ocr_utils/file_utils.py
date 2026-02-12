@@ -31,9 +31,7 @@ async def download_file(url: str, headers: dict) -> bytes:
                 return content
             else:
                 error_text = await resp.text()
-                raise Exception(
-                    f"Failed to download file: HTTP {resp.status} – {error_text}"
-                )
+                raise Exception(f"Failed to download file: HTTP {resp.status} – {error_text}")
 
 
 def pdf_to_base64_images(
@@ -42,13 +40,13 @@ def pdf_to_base64_images(
     dpi: int = 150,
 ) -> list[dict]:
     """
-    Конвертирует PDF документ в список base64-кодированных PNG-изображений.
+    Конвертирует PDF документ в список base64 PNG-изображений.
     Каждая страница рендерится с заданным DPI, кодируется в base64 и возвращается как data URL.
 
     Args:
         pdf_bytes: Байты PDF файла для конвертации.
         filename: Имя файла для логирования.
-        dpi: Желаемое разрешение в DPI.
+        dpi: Разрешение для конвертации PDF в изображения.
 
     Returns:
         Список словарей в формате:
@@ -56,14 +54,12 @@ def pdf_to_base64_images(
         Пустой список, если PDF не содержит страниц.
 
     Raises:
-        ValueError: Если pdf_bytes пуст или dpi некорректен
+        ValueError: Если pdf_bytes пуст
         RuntimeError: Если не удалось открыть PDF документ
         Exception: Если произошла ошибка при обработке страниц
     """
     if not pdf_bytes:
         raise ValueError("pdf_bytes cannot be empty")
-    if dpi <= 0:
-        raise ValueError(f"dpi must be positive, got {dpi}")
 
     image_blocks = []
     pdf_document = None
@@ -82,18 +78,12 @@ def pdf_to_base64_images(
                 png_data = pix.tobytes("png")
                 b64_content = base64.b64encode(png_data).decode("utf-8")
                 data_url = f"data:image/png;base64,{b64_content}"
-                image_blocks.append(
-                    {"type": "image_url", "image_url": {"url": data_url}}
-                )
+                image_blocks.append({"type": "image_url", "image_url": {"url": data_url}})
             except Exception as page_error:
-                logger.error(
-                    f"Error processing page {page_num + 1} of {filename}: {page_error}"
-                )
+                logger.error(f"Error processing page {page_num + 1} of {filename}: {page_error}")
                 raise
 
-        logger.info(
-            f"PDF converted: {filename} ({len(image_blocks)} pages) at {dpi} DPI"
-        )
+        logger.info(f"PDF converted: {filename} ({len(image_blocks)} pages) at {dpi} DPI")
 
     except RuntimeError as e:
         logger.error(f"Failed to open PDF {filename}: {e}")
@@ -131,8 +121,6 @@ async def process_pdf_to_base64_images(
 
     Returns:
         Словарь {file_id: [image_blocks]} с блоками изображений для каждого файла.
-        Если токен не установлен, возвращает пустой словарь.
-        Файлы, которые не удалось обработать, не включаются в результат.
 
     Raises:
         ValueError: Если file_urls пуст или некорректен
