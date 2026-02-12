@@ -188,12 +188,15 @@ class Pipeline:
             logger.warning("Missing user_id or chat_id, skipping file processing")
             return body
 
-        logger.info(f"Inlet: received {len(messages)} messages, current_message_id: {current_message_id}")
-        logger.info(f"Inlet: user messages IDs: {[m.get('id') for m in messages if m.get('role') == 'user']}")
+        user_messages_count = sum(1 for m in messages if m.get("role") == "user")
+        logger.info(f"Inlet: received {len(messages)} messages ({user_messages_count} user), current_message_id: {current_message_id}")
 
         processed_file_ids, file_cache_session = self._ensure_cache_initialized(user_id, chat_id)
 
         logger.info(f"Inlet: file_cache_session has {len(file_cache_session)} cached files")
+
+        current_user_msg_index = sum(1 for m in messages if m.get("role") == "user") - 1
+        logger.info(f"Inlet: current_user_msg_index: {current_user_msg_index}")
 
         initial_state = {
             "body": body,
@@ -202,6 +205,7 @@ class Pipeline:
             "user_id": user_id,
             "chat_id": chat_id,
             "current_message_id": current_message_id,
+            "current_user_msg_index": current_user_msg_index,
             "processed_file_ids": processed_file_ids,
             "file_cache_session": file_cache_session,
             "new_files": [],
@@ -214,6 +218,7 @@ class Pipeline:
         self,
         new_files: List[dict],
         current_message_id: str,
+        current_user_msg_index: int,
         file_cache_session: dict,
     ) -> None:
         """
@@ -223,6 +228,7 @@ class Pipeline:
         Args:
             new_files: Список новых файлов для обработки
             current_message_id: ID текущего сообщения
+            current_user_msg_index: Позиция текущего user-сообщения среди всех user-сообщений
             file_cache_session: Кэш файлов для текущего чата
 
         Raises:
@@ -267,10 +273,11 @@ class Pipeline:
                     ocr_markdown = html_to_markdown_with_tables(final_html)
                     file_cache_session[file_id] = {
                         "message_id": current_message_id,
+                        "user_msg_index": current_user_msg_index,
                         "filename": filename,
                         "ocr_markdown": ocr_markdown,
                     }
-                    logger.info(f"Cached OCR result for {filename} (id: {file_id}) for message_id: {current_message_id}")
+                    logger.info(f"Cached OCR result for {filename} (id: {file_id}) at user_msg_index: {current_user_msg_index}")
                 except Exception as file_error:
                     logger.error(f"Error processing file {filename} with PaddleOCR: {file_error}")
                     raise
@@ -292,11 +299,12 @@ class Pipeline:
                     image_blocks = files_images.get(file_id, [])
                     file_cache_session[file_id] = {
                         "message_id": current_message_id,
+                        "user_msg_index": current_user_msg_index,
                         "filename": filename,
                         "images": image_blocks,
                     }
                     logger.info(
-                        f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images"
+                        f"Cached file {filename} (id: {file_id}) at user_msg_index: {current_user_msg_index} with {len(image_blocks)} images"
                     )
             except Exception as fallback_error:
                 logger.error(f"Fallback to VLM also failed: {fallback_error}")
@@ -347,21 +355,21 @@ class Pipeline:
         """
         Обновляет все сообщения пользователя, добавляя изображения/результат OCR и имена файлов
         к соответствующим сообщениям на основе кэша файлов.
-        Сопоставление файлов с сообщениями выполняется по message_id.
+        Сопоставление файлов с сообщениями выполняется по user_msg_index (позиции user-сообщения).
 
         Args:
             messages: Список сообщений для обновления
-            file_cache: Кэш файлов для текущей сессии {file_id: {message_id, filename, images/ocr_markdown}}
+            file_cache: Кэш файлов для текущей сессии {file_id: {user_msg_index, filename, images/ocr_markdown}}
 
         Returns:
             Обновленный список сообщений с добавленными изображениями и OCR результатами
         """
-        files_by_message = {}
+        files_by_index = {}
         for file_id, file_data in file_cache.items():
-            msg_id = file_data["message_id"]
-            if msg_id not in files_by_message:
-                files_by_message[msg_id] = []
-            files_by_message[msg_id].append(
+            idx = file_data["user_msg_index"]
+            if idx not in files_by_index:
+                files_by_index[idx] = []
+            files_by_index[idx].append(
                 {
                     "file_id": file_id,
                     "filename": file_data.get("filename"),
@@ -370,8 +378,9 @@ class Pipeline:
                 }
             )
         logger.info(f"_update_messages_with_files: file_cache has {len(file_cache)} entries")
-        logger.info(f"_update_messages_with_files: files_by_message keys: {list(files_by_message.keys())}")
+        logger.info(f"_update_messages_with_files: files_by_index keys: {list(files_by_index.keys())}")
 
+        user_message_index = 0
         updated_messages = []
 
         for msg in messages:
@@ -409,10 +418,9 @@ class Pipeline:
             if user_text:
                 new_content.append({"type": "text", "text": user_text})
 
-            msg_id = msg.get("id")
-            files_for_this_message = files_by_message.get(msg_id, []) if msg_id else []
+            files_for_this_message = files_by_index.get(user_message_index, [])
             if files_for_this_message:
-                logger.info(f"Message {msg_id}: found {len(files_for_this_message)} files: {[f.get('filename') for f in files_for_this_message]}")
+                logger.info(f"User message index {user_message_index}: found {len(files_for_this_message)} files: {[f.get('filename') for f in files_for_this_message]}")
 
             ocr_parts = [(f["filename"], f["ocr_markdown"]) for f in files_for_this_message if f.get("ocr_markdown")]
             has_images_from_cache = any(f.get("images") for f in files_for_this_message)
@@ -453,6 +461,7 @@ class Pipeline:
                 "content": new_content,
             }
             updated_messages.append(updated_msg)
+            user_message_index += 1
 
         return updated_messages
 

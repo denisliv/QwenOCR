@@ -11,6 +11,7 @@ class DocumentProcessingState(TypedDict, total=False):
     user_id: Optional[str]
     chat_id: Optional[str]
     current_message_id: Optional[str]
+    current_user_msg_index: int
     files: List[dict[str, Any]]
     messages: List[dict[str, Any]]
 

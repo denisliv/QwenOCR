@@ -57,14 +57,15 @@ async def _process_paddleocr_node(state: DocumentProcessingState, *, pipeline) -
     """Обрабатывает новые файлы через PaddleOCR (с fallback на VLM при ошибке)."""
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
+    current_user_msg_index = state.get("current_user_msg_index", 0)
     file_cache_session = state.get("file_cache_session")
     if not new_files or not current_message_id:
         return {}
     if file_cache_session is None:
         logger.error("file_cache_session is None in _process_paddleocr_node")
         return {}
-    logger.info(f"Processing {len(new_files)} files with PaddleOCR for message_id: {current_message_id}")
-    await pipeline._process_files_with_paddleocr(new_files, current_message_id, file_cache_session)
+    logger.info(f"Processing {len(new_files)} files with PaddleOCR for user_msg_index: {current_user_msg_index}")
+    await pipeline._process_files_with_paddleocr(new_files, current_message_id, current_user_msg_index, file_cache_session)
     logger.info(f"PaddleOCR processing completed. file_cache_session keys: {list(file_cache_session.keys())}")
     return {"file_cache_session": file_cache_session}
 
@@ -73,13 +74,14 @@ async def _process_vlm_node(state: DocumentProcessingState, *, pipeline) -> dict
     """Обрабатывает новые файлы как base64-изображения для VLM."""
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
+    current_user_msg_index = state.get("current_user_msg_index", 0)
     file_cache_session = state.get("file_cache_session")
     if not new_files or not current_message_id:
         return {}
     if file_cache_session is None:
         logger.error("file_cache_session is None in _process_vlm_node")
         return {}
-    logger.info(f"Processing {len(new_files)} files with VLM for message_id: {current_message_id}")
+    logger.info(f"Processing {len(new_files)} files with VLM for user_msg_index: {current_user_msg_index}")
     files_images = await process_pdf_to_base64_images(
         new_files,
         pipeline.valves.OPENWEBUI_HOST,
@@ -92,10 +94,11 @@ async def _process_vlm_node(state: DocumentProcessingState, *, pipeline) -> dict
         image_blocks = files_images.get(file_id, [])
         file_cache_session[file_id] = {
             "message_id": current_message_id,
+            "user_msg_index": current_user_msg_index,
             "filename": filename,
             "images": image_blocks,
         }
-        logger.info(f"Cached file {filename} (id: {file_id}) for message_id: {current_message_id} with {len(image_blocks)} images")
+        logger.info(f"Cached file {filename} (id: {file_id}) at user_msg_index: {current_user_msg_index} with {len(image_blocks)} images")
     logger.info(f"VLM processing completed. file_cache_session keys: {list(file_cache_session.keys())}")
     return {"file_cache_session": file_cache_session}
 
