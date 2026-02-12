@@ -8,30 +8,10 @@ from ocr_utils.state import DocumentProcessingState
 logger = logging.getLogger(__name__)
 
 
-def _validate_input_node(state: DocumentProcessingState) -> dict:
-    """Извлекает user_id, chat_id, files, messages из body/user; при ошибке помечает skip."""
-    body = state.get("body") or {}
-    user = state.get("user") or {}
-    metadata = body.get("metadata", {})
-    updates: dict = {
-        "user_id": metadata.get("user_id") or user.get("id"),
-        "chat_id": metadata.get("chat_id"),
-        "current_message_id": metadata.get("message_id"),
-        "files": body.get("files", []),
-        "messages": body.get("messages", []),
-    }
-    if not updates["user_id"] or not updates["chat_id"]:
-        logger.warning("Missing user_id or chat_id, skipping file processing")
-        updates["skip_processing"] = True
-    return updates
-
-
 def _detect_new_files_node(state: DocumentProcessingState) -> dict:
     """Определяет новые PDF-файлы и добавляет их в new_files и в processed_file_ids."""
     files = state.get("files") or []
     processed_file_ids = state.get("processed_file_ids")
-    current_message_id = state.get("current_message_id")
-    message_order = state.get("message_order") or []
 
     pdf_valid = [f for f in files if (f.get("file") or {}).get("meta", {}).get("content_type") == "application/pdf"]
 
@@ -50,10 +30,6 @@ def _detect_new_files_node(state: DocumentProcessingState) -> dict:
                 processed_file_ids.add(file_id)
             logger.info(f"New file detected: {f.get('name', 'unknown.pdf')} (id: {file_id})")
 
-    if new_files and current_message_id and current_message_id not in message_order:
-        message_order.append(current_message_id)
-        logger.info(f"Added message_id {current_message_id} to order cache")
-
     return {"new_files": new_files}
 
 
@@ -65,8 +41,6 @@ def _choose_method_node(state: DocumentProcessingState, *, pipeline) -> dict:
 
 def _route_new_files(state: DocumentProcessingState) -> Literal["has_new_files", "no_new_files"]:
     """Маршрут: есть ли новые файлы и нужно ли их обрабатывать."""
-    if state.get("skip_processing"):
-        return "no_new_files"
     new_files = state.get("new_files") or []
     current_message_id = state.get("current_message_id")
     if not new_files or not current_message_id:
@@ -126,29 +100,11 @@ async def _process_vlm_node(state: DocumentProcessingState, *, pipeline) -> dict
     return {"file_cache_session": file_cache_session}
 
 
-def _cache_results_node(state: DocumentProcessingState) -> dict:
-    """Обновляет порядок сообщений после обработки."""
-    current_message_id = state.get("current_message_id")
-    message_order = state.get("message_order") or []
-    messages = state.get("messages") or []
-
-    if current_message_id and current_message_id not in message_order:
-        message_order.append(current_message_id)
-
-    order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
-
-    if order_from_messages:
-        message_order.clear()
-        message_order.extend(order_from_messages)
-    return {}
-
-
 def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
     """Подставляет в сообщения изображения/OCR и имена файлов, записывает body['messages']."""
     body = state.get("body") or {}
     messages = state.get("messages") or []
     file_cache_session = state.get("file_cache_session")
-    state_message_order = state.get("message_order") or []
 
     if file_cache_session is None:
         logger.error("file_cache_session is None in _update_messages_node")
@@ -160,25 +116,7 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
             f"File {file_id}: message_id={file_data.get('message_id')}, has_ocr={bool(file_data.get('ocr_markdown'))}, has_images={bool(file_data.get('images'))}"
         )
 
-    current_message_id = state.get("current_message_id")
-
-    order_from_messages = [m["id"] for m in messages if m.get("role") == "user" and m.get("id")]
-    if order_from_messages:
-        effective_order = order_from_messages
-    else:
-        effective_order = list(state_message_order)
-        if current_message_id and current_message_id not in effective_order:
-            effective_order.append(current_message_id)
-
-    if state_message_order is not None:
-        state_message_order.clear()
-        state_message_order.extend(effective_order)
-
-    message_order = effective_order
-    logger.info(f"Message order: {message_order}")
-    logger.info(f"Messages count: {len(messages)}, user messages: {[m.get('id') for m in messages if m.get('role') == 'user']}")
-
-    updated = pipeline._update_messages_with_files(messages, file_cache_session, message_order)
+    updated = pipeline._update_messages_with_files(messages, file_cache_session)
     body["messages"] = updated
     logger.info(f"Updated messages count: {len(updated)}")
     for msg in updated:
@@ -191,7 +129,7 @@ def _update_messages_node(state: DocumentProcessingState, *, pipeline) -> dict:
                 )
                 if has_files:
                     logger.info(f"Message {msg.get('id')} has files attached")
-    return {"body": body, "message_order": list(message_order)}
+    return {"body": body}
 
 
 def create_processing_graph(pipeline):
@@ -218,16 +156,13 @@ def create_processing_graph(pipeline):
     def update_messages_wrapper(state: DocumentProcessingState) -> dict:
         return _update_messages_node(state, pipeline=pipeline)
 
-    workflow.add_node("validate_input", _validate_input_node)
     workflow.add_node("detect_new_files", _detect_new_files_node)
     workflow.add_node("choose_processing_method", choose_method_wrapper)
     workflow.add_node("process_with_paddleocr", process_paddleocr_wrapper)
     workflow.add_node("process_with_vlm", process_vlm_wrapper)
-    workflow.add_node("cache_results", _cache_results_node)
     workflow.add_node("update_messages", update_messages_wrapper)
 
-    workflow.set_entry_point("validate_input")
-    workflow.add_edge("validate_input", "detect_new_files")
+    workflow.set_entry_point("detect_new_files")
     workflow.add_conditional_edges(
         "detect_new_files",
         _route_new_files,
@@ -244,9 +179,8 @@ def create_processing_graph(pipeline):
             "vlm": "process_with_vlm",
         },
     )
-    workflow.add_edge("process_with_paddleocr", "cache_results")
-    workflow.add_edge("process_with_vlm", "cache_results")
-    workflow.add_edge("cache_results", "update_messages")
+    workflow.add_edge("process_with_paddleocr", "update_messages")
+    workflow.add_edge("process_with_vlm", "update_messages")
     workflow.add_edge("update_messages", END)
 
     return workflow.compile()

@@ -7,7 +7,6 @@ class DocumentProcessingState(TypedDict, total=False):
     """
 
     body: dict[str, Any]
-    user: dict[str, Any]
 
     user_id: Optional[str]
     chat_id: Optional[str]
@@ -17,9 +16,7 @@ class DocumentProcessingState(TypedDict, total=False):
 
     processed_file_ids: Set[str]
     file_cache_session: dict[str, Any]
-    message_order: List[str]
 
     new_files: List[dict[str, Any]]
     use_paddle_ocr: bool
-    skip_processing: bool
     errors: List[str]

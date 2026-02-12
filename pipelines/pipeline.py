@@ -64,8 +64,6 @@ class Pipeline:
         self._file_cache = {}
         # Кэш обработанных file_id для быстрой проверки: {user_id: {chat_id: set([file_id1, file_id2, ...])}}
         self._processed_files_cache = {}
-        # Порядок появления message_id для правильного сопоставления с сообщениями: {user_id: {chat_id: [message_id1, message_id2, ...]}}
-        self._message_order_cache = {}
 
         self.valves = self.Valves(
             **{
@@ -104,7 +102,6 @@ class Pipeline:
         try:
             self._file_cache.clear()
             self._processed_files_cache.clear()
-            self._message_order_cache.clear()
             self.vlm = None
             gc.collect()
         except Exception as e:
@@ -194,14 +191,12 @@ class Pipeline:
         logger.info(f"Inlet: received {len(messages)} messages, current_message_id: {current_message_id}")
         logger.info(f"Inlet: user messages IDs: {[m.get('id') for m in messages if m.get('role') == 'user']}")
 
-        processed_file_ids, file_cache_session, message_order = self._ensure_cache_initialized(user_id, chat_id)
+        processed_file_ids, file_cache_session = self._ensure_cache_initialized(user_id, chat_id)
 
         logger.info(f"Inlet: file_cache_session has {len(file_cache_session)} cached files")
-        logger.info(f"Inlet: message_order: {message_order}")
 
         initial_state = {
             "body": body,
-            "user": user,
             "files": files,
             "messages": messages,
             "user_id": user_id,
@@ -209,16 +204,10 @@ class Pipeline:
             "current_message_id": current_message_id,
             "processed_file_ids": processed_file_ids,
             "file_cache_session": file_cache_session,
-            "message_order": message_order,
             "new_files": [],
             "use_paddle_ocr": False,
         }
         final_state = await self._inlet_graph.ainvoke(initial_state)
-        final_order = final_state.get("message_order")
-        if final_order is not None:
-            message_order.clear()
-            message_order.extend(final_order)
-            logger.info(f"Inlet: synced message_order to cache: {message_order}")
         return final_state.get("body", body)
 
     async def _process_files_with_paddleocr(
@@ -325,7 +314,7 @@ class Pipeline:
                 except Exception as cleanup_error:
                     logger.warning(f"Error cleaning up temp file {p}: {cleanup_error}")
 
-    def _ensure_cache_initialized(self, user_id: str, chat_id: str) -> tuple[set, dict, list]:
+    def _ensure_cache_initialized(self, user_id: str, chat_id: str) -> tuple[set, dict]:
         """
         Инициализирует и возвращает кэши для указанного пользователя и чата.
         Создает необходимые структуры данных, если они не существуют.
@@ -335,10 +324,9 @@ class Pipeline:
             chat_id: Идентификатор чата
 
         Returns:
-            Кортеж из трех элементов:
+            Кортеж из двух элементов:
             - set: Множество обработанных file_id
             - dict: Кэш файлов для сессии
-            - list: Порядок появления message_id
         """
         if user_id not in self._processed_files_cache:
             self._processed_files_cache[user_id] = {}
@@ -350,26 +338,20 @@ class Pipeline:
         if chat_id not in self._file_cache[user_id]:
             self._file_cache[user_id][chat_id] = {}
 
-        if user_id not in self._message_order_cache:
-            self._message_order_cache[user_id] = {}
-        if chat_id not in self._message_order_cache[user_id]:
-            self._message_order_cache[user_id][chat_id] = []
-
         return (
             self._processed_files_cache[user_id][chat_id],
             self._file_cache[user_id][chat_id],
-            self._message_order_cache[user_id][chat_id],
         )
 
-    def _update_messages_with_files(self, messages: List[dict], file_cache: dict, message_order: List[str]) -> List[dict]:
+    def _update_messages_with_files(self, messages: List[dict], file_cache: dict) -> List[dict]:
         """
         Обновляет все сообщения пользователя, добавляя изображения/результат OCR и имена файлов
-        к соответствующим сообщениям на основе кэша файлов и порядка появления message_id.
+        к соответствующим сообщениям на основе кэша файлов.
+        Сопоставление файлов с сообщениями выполняется по message_id.
 
         Args:
             messages: Список сообщений для обновления
             file_cache: Кэш файлов для текущей сессии {file_id: {message_id, filename, images/ocr_markdown}}
-            message_order: Список message_id в порядке их появления
 
         Returns:
             Обновленный список сообщений с добавленными изображениями и OCR результатами
@@ -389,9 +371,7 @@ class Pipeline:
             )
         logger.info(f"_update_messages_with_files: file_cache has {len(file_cache)} entries")
         logger.info(f"_update_messages_with_files: files_by_message keys: {list(files_by_message.keys())}")
-        logger.info(f"_update_messages_with_files: message_order: {message_order}")
 
-        user_message_index = 0
         updated_messages = []
 
         for msg in messages:
@@ -430,26 +410,9 @@ class Pipeline:
                 new_content.append({"type": "text", "text": user_text})
 
             msg_id = msg.get("id")
-            if msg_id is not None:
-                files_for_this_message = files_by_message.get(msg_id, [])
-                logger.info(f"Message {msg_id} (index {user_message_index}): found {len(files_for_this_message)} files by msg_id")
-                if files_for_this_message:
-                    logger.info(f"  Files: {[f.get('filename') for f in files_for_this_message]}")
-            elif user_message_index < len(message_order):
-                target_message_id = message_order[user_message_index]
-                files_for_this_message = files_by_message.get(target_message_id, [])
-                logger.info(
-                    f"Message (no id, index {user_message_index}): using target_message_id {target_message_id}, found {len(files_for_this_message)} files"
-                )
-                if files_for_this_message:
-                    logger.info(f"  Files: {[f.get('filename') for f in files_for_this_message]}")
-            else:
-                files_for_this_message = []
-                logger.warning(
-                    f"Message (no id, index {user_message_index}): index {user_message_index} >= message_order length {len(message_order)}, no files found"
-                )
-                logger.info(f"  Available message_ids in cache: {list(files_by_message.keys())}")
-                logger.info(f"  Current message_order: {message_order}")
+            files_for_this_message = files_by_message.get(msg_id, []) if msg_id else []
+            if files_for_this_message:
+                logger.info(f"Message {msg_id}: found {len(files_for_this_message)} files: {[f.get('filename') for f in files_for_this_message]}")
 
             ocr_parts = [(f["filename"], f["ocr_markdown"]) for f in files_for_this_message if f.get("ocr_markdown")]
             has_images_from_cache = any(f.get("images") for f in files_for_this_message)
@@ -490,7 +453,6 @@ class Pipeline:
                 "content": new_content,
             }
             updated_messages.append(updated_msg)
-            user_message_index += 1
 
         return updated_messages
 
